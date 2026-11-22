@@ -1,0 +1,6 @@
+# Freebuff (marqueur de projet local)
+.freebuff/
+
+# Dépendances et artefacts éventuels à la racine
+node_modules/
+.next/

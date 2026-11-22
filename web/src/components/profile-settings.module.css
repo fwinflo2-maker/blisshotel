@@ -1,0 +1,16 @@
+.launcher { position: fixed; left: 16px; bottom: 16px; z-index: 900; display: inline-flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 999px; border: 1px solid rgba(128,128,128,.35); background: #1f2933; color: #fff; font: 600 13px/1 inherit; cursor: pointer; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+.backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; background: rgba(0,0,0,.55); padding: 16px; }
+.dialog { width: min(480px, 100%); max-height: 90vh; overflow: auto; background: #fff; color: #1f2933; border-radius: 14px; padding: 20px; box-shadow: 0 20px 60px rgba(0,0,0,.4); }
+.head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.head h2 { margin: 0; font-size: 18px; }
+.close { border: 0; background: transparent; cursor: pointer; color: inherit; display: grid; }
+.forms { display: grid; gap: 16px; }
+.card { display: grid; gap: 10px; padding: 14px; border: 1px solid rgba(128,128,128,.3); border-radius: 12px; }
+.card h3 { margin: 0; font-size: 15px; }
+.card label { display: grid; gap: 4px; font-size: 13px; }
+.card input { padding: 9px 10px; border-radius: 8px; border: 1px solid rgba(128,128,128,.5); background: transparent; color: inherit; font: inherit; }
+.card button { padding: 10px; border-radius: 8px; border: 0; background: #b08d57; color: #fff; font-weight: 700; cursor: pointer; }
+.card button:disabled { opacity: .6; cursor: wait; }
+.note { margin: 0; font-size: 12px; opacity: .75; }
+.ok { margin: 0; font-size: 13px; color: #1b7f4b; }
+.err { margin: 0; font-size: 13px; color: #c0392b; }

@@ -1,0 +1,61 @@
+.route-loading-overlay {
+  position: fixed;
+  z-index: 2000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  animation: route-loading-appear 180ms ease-out both;
+}
+.route-loading-card {
+  display: grid;
+  justify-items: center;
+  gap: 24px;
+  padding: 24px;
+  background: transparent;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: .04em;
+  text-shadow: 0 1px 8px rgba(0,0,0,.4);
+  text-align: center;
+}
+.route-loading-rings {
+  position: relative;
+  display: block;
+  width: min(190px, 56vw);
+  aspect-ratio: 1;
+  background: transparent;
+  border: 2px solid rgba(154,203,240,.42);
+  border-top-color: #8ec2ec;
+  border-bottom-color: rgba(198,168,120,.72);
+  border-radius: 50%;
+  box-shadow: 0 0 32px rgba(88,150,208,.3), inset 0 0 22px rgba(88,150,208,.08);
+  animation: route-loading-spin 1.5s linear infinite;
+}
+.route-loading-rings::before,
+.route-loading-rings::after {
+  position: absolute;
+  content: "";
+  border-radius: 50%;
+}
+.route-loading-rings::before {
+  inset: 15%;
+  border: 2px dashed rgba(232,207,166,.95);
+  border-left-color: transparent;
+  animation: route-loading-spin 2s linear infinite reverse;
+}
+.route-loading-rings::after {
+  inset: 30%;
+  border: 3px solid rgba(142,194,236,.56);
+  border-right-color: #8ec2ec;
+  animation: route-loading-spin .9s linear infinite;
+}
+@keyframes route-loading-spin { to { transform: rotate(360deg); } }
+@keyframes route-loading-appear { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .route-loading-overlay,
+  .route-loading-rings,
+  .route-loading-rings::before,
+  .route-loading-rings::after { animation: none; }
+}

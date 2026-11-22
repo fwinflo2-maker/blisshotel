@@ -1,0 +1,32 @@
+.donutLayout { display: grid; grid-template-columns: minmax(126px, 160px) minmax(0, 1fr); align-items: center; gap: 18px; min-height: 170px; }
+.donut { width: 100%; overflow: visible; transform: rotate(-90deg); }
+.track, .segment { fill: none; stroke-width: 10; }
+.track { stroke: var(--cockpit-chart-track,#edf1f5); }
+.segment { stroke-linecap: round; animation: ring-enter 850ms cubic-bezier(.2,.7,.25,1) both; }
+.centerValue, .centerLabel { transform: rotate(90deg); transform-origin: 60px 60px; text-anchor: middle; }
+.centerValue { fill: var(--cockpit-chart-text,#18324a); font-size: 20px; font-weight: 800; letter-spacing: -.04em; }
+.centerLabel { fill: var(--cockpit-chart-muted,#7c8a9a); font-size: 7px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.legend { display: grid; gap: 4px; min-width: 0; }
+.legendButton { display: grid; grid-template-columns: 8px minmax(0,1fr) auto; align-items: center; gap: 8px; min-height: 30px; padding: 4px 6px; border: 0; border-radius: 7px; background: transparent; color: var(--cockpit-chart-muted,#66758a); text-align: left; font: inherit; font-size: 10px; }
+.legendButton:not(:disabled) { cursor: pointer; }
+.legendButton:not(:disabled):hover { background: var(--cockpit-chart-hover,#f3f7fa); color: var(--cockpit-chart-text,#18324a); transform: translateX(2px); }
+.legendButton:disabled { cursor: default; }
+.legendButton strong { color: var(--cockpit-chart-text,#18324a); font-size: 11px; }
+.legendSwatch { width: 8px; height: 8px; border-radius: 50%; }
+.legendButton { min-height:32px; font-size:11px; font-weight:650; transition: background .18s ease, color .18s ease, transform .18s ease; animation: chart-rise .45s both; }
+.legendButton:nth-child(2) { animation-delay: 70ms; }
+.legendButton:nth-child(3) { animation-delay: 140ms; }
+.legendButton:nth-child(4) { animation-delay: 210ms; }
+.legendButton:nth-child(5) { animation-delay: 280ms; }
+.legendButton strong { font-size:12px; font-weight:800; }
+.barChart { display: grid; gap: 16px; padding: 9px 1px; }
+.barRow { display: grid; grid-template-columns: minmax(88px, .8fr) minmax(65px, 1.6fr) 28px; align-items: center; gap: 10px; color: var(--cockpit-chart-muted,#66758a); font-size: 10px; }
+.barRow { font-size:11px; font-weight:650; }
+.barRow > strong { color: var(--cockpit-chart-text,#18324a); font-size: 12px; font-weight:800; text-align: right; }
+.barTrack { height: 8px; overflow: hidden; border-radius: 99px; background: var(--cockpit-chart-track,#edf1f5); }
+.barFill { display: block; height: 100%; min-width: 0; border-radius: inherit; animation: bar-enter 650ms cubic-bezier(.2,.7,.25,1) both; transform-origin: left; }
+@keyframes ring-enter { from { opacity: .2; stroke-dasharray: 0 400; } to { opacity: 1; } }
+@keyframes bar-enter { from { transform: scaleX(.04); filter: brightness(1.25); } to { transform: scaleX(1); filter: brightness(1); } }
+@keyframes chart-rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@media (max-width: 520px) { .donutLayout { grid-template-columns: minmax(100px, 132px) minmax(0,1fr); gap: 10px; } .legendButton { gap: 6px; font-size: 9px; } }
+@media (prefers-reduced-motion: reduce) { .segment, .barFill, .legendButton { animation: none; transition: none; } }

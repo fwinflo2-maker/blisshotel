@@ -1,0 +1,159 @@
+.agent-account-panel {
+  min-width: 0;
+  margin: 0 0 16px;
+  padding: 20px;
+  border: 1px solid #e3e9ef;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 7px 24px rgb(32 57 79 / 4%);
+}
+
+.agent-account-title {
+  margin: 0 0 6px;
+  color: #203b55;
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.agent-account-description {
+  margin: 0 0 16px;
+  color: #68788c;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.agent-account-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  align-items: end;
+  gap: 12px;
+}
+
+.agent-account-fields label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+  color: #52657b;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.agent-account-fields input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid #cbd6e1;
+  border-radius: 7px;
+  outline: none;
+  background: #fff;
+  color: #203b55;
+  font: inherit;
+  font-size: 12px;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.agent-account-fields input:focus-visible {
+  border-color: #397caf;
+  box-shadow: 0 0 0 3px rgb(57 124 175 / 18%);
+}
+
+.agent-account-fields button {
+  min-height: 40px;
+  padding: 0 15px;
+  border: 1px solid #397caf;
+  border-radius: 7px;
+  background: #397caf;
+  color: #fff;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 750;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.agent-account-fields button:hover:not(:disabled) {
+  border-color: #28648f;
+  background: #28648f;
+}
+
+.agent-account-fields button:focus-visible {
+  outline: 3px solid rgb(57 124 175 / 25%);
+  outline-offset: 2px;
+}
+
+.agent-account-fields button:disabled {
+  cursor: wait;
+  opacity: .65;
+}
+
+.agent-account-message {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid;
+  border-radius: 7px;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.agent-account-error {
+  border-color: #f0d1d1;
+  background: #fff8f8;
+  color: #913c3c;
+}
+
+.agent-account-success {
+  border-color: #cfe4d6;
+  background: #f3faf5;
+  color: #2f704d;
+}
+
+.housekeeping-shell[data-theme="dark"] .agent-account-panel {
+  border-color: #2b3a49;
+  background: #192532;
+}
+
+.housekeeping-shell[data-theme="dark"] .agent-account-title {
+  color: #e4edf5;
+}
+
+.housekeeping-shell[data-theme="dark"] .agent-account-description,
+.housekeeping-shell[data-theme="dark"] .agent-account-fields label {
+  color: #aab8c7;
+}
+
+.housekeeping-shell[data-theme="dark"] .agent-account-fields input {
+  border-color: #46596b;
+  background: #111923;
+  color: #e4edf5;
+}
+
+.housekeeping-shell[data-theme="dark"] .agent-account-error {
+  border-color: #683f46;
+  background: #321f25;
+  color: #ffc5c5;
+}
+
+.housekeeping-shell[data-theme="dark"] .agent-account-success {
+  border-color: #315941;
+  background: #1a3024;
+  color: #a7e0ba;
+}
+
+@media (max-width: 760px) {
+  .agent-account-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .agent-account-panel {
+    padding: 15px;
+  }
+
+  .agent-account-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
