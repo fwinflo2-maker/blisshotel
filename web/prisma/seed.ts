@@ -15,38 +15,44 @@ async function main() {
       key: `template:${role.code}`, code: role.code, name: role.name, optional: !!role.optional,
       permissions: { create: role.permissions.map(permissionCode => ({ permissionCode })) },
     } });
+    const templateRole = await db.role.findUniqueOrThrow({ where: { key: `template:${role.code}` }, select: { id: true } });
+    await db.rolePermission.createMany({
+      data: role.permissions.map(permissionCode => ({ roleId: templateRole.id, permissionCode })),
+      skipDuplicates: true,
+    });
   }
   await db.restaurantMenuItem.upsert({
     where: { code: 'BREAKFAST_ROOM_NIGHT' },
-    update: { name: 'Petit-dejeuner a la carte', description: "Portion facultative a commander a l'unite", billingUnit: 'ITEM' },
+    update: {
+      name: 'Petit-déjeuner à la carte',
+      description: 'Portion facultative à commander à l’unité',
+    },
     create: {
       id: 'restaurant-breakfast-room-night',
       code: 'BREAKFAST_ROOM_NIGHT',
-      name: 'Petit-dejeuner a la carte',
-      description: "Portion facultative a commander a l'unite",
+      name: 'Petit-déjeuner à la carte',
+      description: 'Portion facultative à commander à l’unité',
       category: 'BREAKFAST',
-      billingUnit: 'ITEM',
-      price: new Prisma.Decimal('5000.00'),
-    },
-  });
-  await db.restaurantMenuItem.upsert({
-    where: { code: 'LUNCH_ROOM_NIGHT' },
-    update: { name: 'Dejeuner a la carte', description: 'Portion facultative a commander separement', category: 'FOOD', billingUnit: 'ITEM' },
-    create: {
-      id: 'restaurant-lunch-room-night',
-      code: 'LUNCH_ROOM_NIGHT',
-      name: 'Dejeuner a la carte',
-      description: 'Portion facultative a commander separement',
-      category: 'FOOD',
       billingUnit: 'ITEM',
       price: new Prisma.Decimal('5000.00'),
     },
   });
   await db.hotelConfiguration.upsert({
     where: { id: 1 },
-    update: { currency: 'XAF' },
+    update: {},
     create: { id: 1, name: 'BLISS HOTEL', timezone: 'Africa/Brazzaville', currency: 'XAF', checkOutTime: '12:00' },
   });
+  for (const [code, name] of [
+    ['MTN_MONEY', 'MTN Money'],
+    ['AIRTEL_MONEY', 'Airtel Money'],
+    ['CASH', 'Cash'],
+  ]) {
+    await db.paymentMethod.upsert({
+      where: { code },
+      update: { name, active: true },
+      create: { code, name, active: true },
+    });
+  }
   const standard = await db.roomCategory.upsert({
     where: { name: 'Chambre standard' },
     update: {},

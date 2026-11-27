@@ -15,16 +15,23 @@ export async function GET(request: Request) {
     const scope = await hotelAdminScope('dashboard.view');
     const configuration = await hotelConfiguration();
     const url = new URL(request.url);
-    const period = z.enum(['day', 'week', 'month']).safeParse(url.searchParams.get('period') ?? 'day');
+    const period = z.enum(['day', 'week', 'month', 'year']).safeParse(url.searchParams.get('period') ?? 'day');
     const dateValue = url.searchParams.get('date') ?? hotelDateKey(new Date(), configuration.timezone);
     if (!period.success) return NextResponse.json({ error: 'Période invalide.' }, { status: 400 });
     const selected = parseDateOnly(dateValue);
+    const oldestSelectable = new Date();
+    oldestSelectable.setUTCFullYear(oldestSelectable.getUTCFullYear() - 99);
+    if (selected < oldestSelectable) return NextResponse.json({ error: 'La consultation est limitée aux 99 dernières années.' }, { status: 400 });
     let from = selected;
     let to = addDays(selected, 1);
     if (period.data === 'week') to = addDays(selected, 7);
     if (period.data === 'month') {
       from = new Date(Date.UTC(selected.getUTCFullYear(), selected.getUTCMonth(), 1));
       to = new Date(Date.UTC(selected.getUTCFullYear(), selected.getUTCMonth() + 1, 1));
+    }
+    if (period.data === 'year') {
+      from = new Date(Date.UTC(selected.getUTCFullYear(), 0, 1));
+      to = new Date(Date.UTC(selected.getUTCFullYear() + 1, 0, 1));
     }
     const [rooms, arrivals, departures, futureReservations, inHouse, taskGroups, incidents, upcoming, payments] = await Promise.all([
       db.room.findMany({

@@ -40,6 +40,33 @@ enum RestaurantItemCategory {
   FOOD
   DRINK
   BREAKFAST
+  SOFT_DRINK
+  JUICE
+  WATER
+  BEER
+  WINE
+  WHISKY
+  SPIRIT
+  COCKTAIL
+  STARTER
+  DESSERT
+  OTHER
+}
+
+enum RestaurantStockMovementType {
+  SUPPLY
+  SALE
+  LOSS
+  INTERNAL_USE
+  ADJUSTMENT
+  COUNT
+  REVERSAL
+}
+
+enum RestaurantTableStatus {
+  FREE
+  OCCUPIED
+  TO_CLEAN
 }
 
 enum RestaurantBillingUnit {
@@ -67,6 +94,11 @@ enum CashSessionStatus {
 }
 
 enum ReceptionShiftType {
+  DAY
+  NIGHT
+}
+
+enum RestaurantShiftType {
   DAY
   NIGHT
 }
@@ -106,6 +138,12 @@ enum HousekeepingTaskPriority {
   URGENT
 }
 
+enum ChatParticipantStatus {
+  ACCEPTED
+  INVITED
+  DECLINED
+}
+
 model User {
   id                         String             @id @default(cuid())
   roleId                     String?
@@ -118,6 +156,7 @@ model User {
   createdAt                  DateTime           @default(now())
   role                       Role?              @relation(fields: [roleId], references: [id])
   sessions                   Session[]
+  impersonatedSessions       Session[]           @relation("SessionImpersonator")
   resetTokens                ResetToken[]
   notifications              Notification[]
   cashSessions               CashSession[]
@@ -129,6 +168,8 @@ model User {
   housekeepingTasksInspected HousekeepingTask[] @relation("HousekeepingInspector")
   managedRooms               Room[]             @relation("HotelRoomAdministrator")
   delegatedPermissions      UserPermission[]
+  chatMemberships           ChatParticipant[]
+  sentChatMessages           ChatMessage[]
 
   @@index([roleId])
 }
@@ -142,6 +183,14 @@ model HotelConfiguration {
   checkOutTime             String?  @db.VarChar(5)
   allowCheckoutWithBalance Boolean  @default(false)
   updatedAt                DateTime @updatedAt
+}
+
+model CurrencyRate {
+  currency    String   @id @db.Char(3)
+  xafPerUnit  Decimal  @db.Decimal(16, 6)
+  effectiveAt DateTime
+  source      String   @db.VarChar(60)
+  fetchedAt   DateTime @default(now())
 }
 
 model Role {
@@ -190,10 +239,13 @@ model Session {
   userId    String
   expiresAt DateTime
   createdAt DateTime @default(now())
+  impersonatedById String?
   user      User     @relation(fields: [userId], references: [id])
+  impersonatedBy User? @relation("SessionImpersonator", fields: [impersonatedById], references: [id])
 
   @@index([userId])
   @@index([expiresAt])
+  @@index([impersonatedById])
 }
 
 model ResetToken {
@@ -228,6 +280,47 @@ model Notification {
   user      User      @relation(fields: [userId], references: [id])
 
   @@index([userId, createdAt])
+}
+
+model ChatConversation {
+  id           String             @id @default(cuid())
+  title        String?            @db.VarChar(120)
+  isGroup      Boolean            @default(false)
+  createdById  String
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @default(now()) @updatedAt
+  participants ChatParticipant[]
+  messages     ChatMessage[]
+
+  @@index([updatedAt])
+  @@index([createdById])
+}
+
+model ChatParticipant {
+  id             String                 @id @default(cuid())
+  conversationId String
+  userId         String
+  status         ChatParticipantStatus  @default(ACCEPTED)
+  joinedAt       DateTime               @default(now())
+  lastReadAt     DateTime?
+  conversation   ChatConversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user           User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+  @@index([userId, status])
+}
+
+model ChatMessage {
+  id             String          @id @default(cuid())
+  conversationId String
+  senderId       String
+  body           String          @db.VarChar(4000)
+  createdAt      DateTime        @default(now())
+  conversation   ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender         User             @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@index([senderId, createdAt])
 }
 
 model RateLimit {
@@ -347,6 +440,8 @@ model Reservation {
   adults            Int                @default(1)
   children          Int                @default(0)
   nightlyRate       Decimal            @db.Decimal(10, 2)
+  inputNightlyRate  Decimal?           @db.Decimal(10, 2)
+  inputCurrency     String?            @db.Char(3)
   rateReason        String?            @db.VarChar(500)
   totalAmount       Decimal            @db.Decimal(10, 2)
   createdBy         String
@@ -425,12 +520,78 @@ model RestaurantMenuItem {
   category    RestaurantItemCategory
   billingUnit RestaurantBillingUnit @default(ITEM)
   price       Decimal                @db.Decimal(10, 2)
+  purchasePrice Decimal?              @db.Decimal(10, 2)
   active      Boolean                @default(true)
+  deletedAt   DateTime?              @db.DateTime(3)
+  stockQuantity Decimal?             @db.Decimal(10, 2)
+  stockUnit    String?               @db.VarChar(30)
+  stockAlertAt Decimal?              @db.Decimal(10, 2)
   createdAt   DateTime               @default(now())
   updatedAt   DateTime               @updatedAt
   orderLines  RestaurantOrderLine[]
+  stockCounts RestaurantStockCount[]
+  stockMovements RestaurantStockMovement[]
+  recipeUsages RestaurantRecipeLine[] @relation("RecipeIngredient")
+  recipe      RestaurantRecipeLine[] @relation("RecipeDish")
 
   @@index([active, category, name])
+  @@index([deletedAt, active, category])
+}
+
+model RestaurantStockCount {
+  id          String   @id @default(cuid())
+  menuItemId  String
+  countedBy   String
+  countedByName String @db.VarChar(160)
+  previousQuantity Decimal? @db.Decimal(10, 2)
+  countedQuantity Decimal @db.Decimal(10, 2)
+  note        String?  @db.VarChar(500)
+  createdAt   DateTime @default(now())
+  menuItem    RestaurantMenuItem @relation(fields: [menuItemId], references: [id], onDelete: Restrict)
+
+  @@index([menuItemId, createdAt])
+}
+
+model RestaurantStockMovement {
+  id          String   @id @default(cuid())
+  menuItemId  String
+  type        RestaurantStockMovementType
+  quantity    Decimal  @db.Decimal(10, 2)
+  previousQuantity Decimal? @db.Decimal(10, 2)
+  resultingQuantity Decimal? @db.Decimal(10, 2)
+  reference   String?  @db.VarChar(100)
+  note        String?  @db.VarChar(500)
+  createdBy   String
+  createdByName String @db.VarChar(160)
+  createdAt   DateTime @default(now())
+  menuItem    RestaurantMenuItem @relation(fields: [menuItemId], references: [id], onDelete: Restrict)
+
+  @@index([menuItemId, createdAt])
+  @@index([type, createdAt])
+}
+
+model RestaurantRecipeLine {
+  id             String @id @default(cuid())
+  dishId         String
+  ingredientId   String
+  quantity       Decimal @db.Decimal(10, 3)
+  ingredientUnit String @db.VarChar(30)
+  dish           RestaurantMenuItem @relation("RecipeDish", fields: [dishId], references: [id], onDelete: Cascade)
+  ingredient     RestaurantMenuItem @relation("RecipeIngredient", fields: [ingredientId], references: [id], onDelete: Restrict)
+
+  @@unique([dishId, ingredientId])
+  @@index([ingredientId])
+}
+
+model RestaurantTable {
+  id        String @id @default(cuid())
+  number    String @unique @db.VarChar(30)
+  capacity  Int
+  status    RestaurantTableStatus @default(FREE)
+  active    Boolean @default(true)
+  orders    RestaurantOrder[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model RestaurantOrder {
@@ -438,6 +599,7 @@ model RestaurantOrder {
   number          String                @unique @db.VarChar(40)
   source          RestaurantOrderSource
   status          RestaurantOrderStatus @default(PENDING_RECEPTION)
+  receptionReadAt DateTime?
   reservationId   String?
   roomId          String?
   guestName       String                 @db.VarChar(160)
@@ -454,17 +616,27 @@ model RestaurantOrder {
   preparedAt      DateTime?
   readyAt         DateTime?
   servedAt        DateTime?
+  paidAt          DateTime?
+  paidBy          String?               @db.VarChar(191)
+  paidByName      String?               @db.VarChar(160)
+  paymentMethodId String?
+  tableId         String?
   createdAt       DateTime               @default(now())
   updatedAt       DateTime               @updatedAt
   reservation     Reservation?           @relation(fields: [reservationId], references: [id], onDelete: SetNull)
   room            Room?                  @relation(fields: [roomId], references: [id], onDelete: SetNull)
   lines           RestaurantOrderLine[]
   folioLine       FolioLine?
+  paymentMethod   PaymentMethod?         @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
+  table           RestaurantTable?       @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  payments        RestaurantPayment[]
+  cashPayment     Payment?
 
   @@index([status, createdAt])
   @@index([reservationId, createdAt])
   @@index([roomId, createdAt])
   @@index([confirmedAt])
+  @@index([paidAt])
 }
 
 model RestaurantOrderLine {
@@ -489,6 +661,7 @@ model Invoice {
   folioId     String   @unique
   number      String   @db.VarChar(60)
   payerName   String?  @db.VarChar(160)
+  currency    String   @default("XAF") @db.Char(3)
   totalAmount Decimal  @db.Decimal(10, 2)
   issuedAt    DateTime @default(now())
   folio       Folio    @relation(fields: [folioId], references: [id])
@@ -504,9 +677,28 @@ model PaymentMethod {
   active   Boolean   @default(true)
   payments Payment[]
   shiftExpenses ReceptionShiftExpense[]
+  restaurantOrders RestaurantOrder[]
+  restaurantPayments RestaurantPayment[]
 
   @@unique([code])
   @@index([active])
+}
+
+model RestaurantPayment {
+  id              String @id @default(cuid())
+  orderId         String
+  paymentMethodId String
+  amount          Decimal @db.Decimal(10, 2)
+  idempotencyKey  String @unique @db.VarChar(100)
+  reference       String? @db.VarChar(100)
+  receivedBy      String
+  receivedByName  String @db.VarChar(160)
+  confirmedAt     DateTime @default(now())
+  order           RestaurantOrder @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  paymentMethod   PaymentMethod @relation(fields: [paymentMethodId], references: [id], onDelete: Restrict)
+
+  @@index([orderId, confirmedAt])
+  @@index([paymentMethodId, confirmedAt])
 }
 
 model CashSession {
@@ -520,6 +712,9 @@ model CashSession {
   variance      Decimal?          @db.Decimal(10, 2)
   openedAt      DateTime          @default(now())
   closedAt      DateTime?
+  shiftType     RestaurantShiftType?
+  shiftStartedAt DateTime?
+  shiftEndedAt   DateTime?
   user          User              @relation(fields: [userId], references: [id])
   payments      Payment[]
   shiftReport   ReceptionShiftReport?
@@ -567,11 +762,14 @@ model Payment {
   id              String        @id @default(cuid())
   folioId         String?
   clientId        String?
+  restaurantOrderId String? @unique
   cashSessionId   String
   paymentMethodId String
   receivedBy      String
   idempotencyKey  String        @unique @db.VarChar(100)
   amount          Decimal       @db.Decimal(10, 2)
+  inputAmount     Decimal?      @db.Decimal(10, 2)
+  inputCurrency   String?       @db.Char(3)
   description     String?       @db.VarChar(200)
   reference       String?       @db.VarChar(100)
   createdAt       DateTime      @default(now())
@@ -579,6 +777,7 @@ model Payment {
   client          Client?       @relation(fields: [clientId], references: [id])
   cashSession     CashSession   @relation(fields: [cashSessionId], references: [id])
   paymentMethod   PaymentMethod @relation(fields: [paymentMethodId], references: [id])
+  restaurantOrder RestaurantOrder? @relation(fields: [restaurantOrderId], references: [id], onDelete: Restrict)
 
   @@index([createdAt])
   @@index([folioId, createdAt])

@@ -1,8 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { ProfileLauncher } from '@/components/profile-settings';
-import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, BedDouble, Bell, CalendarDays, Check, ChevronRight, ClipboardCheck, Download, RefreshCw, Search, ShieldAlert, Wallet, Wrench } from 'lucide-react';
+import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, BedDouble, Bell, CalendarDays, Check, ChevronRight, ClipboardCheck, Download, LogOut, RefreshCw, Search, ShieldAlert, Wallet, Wrench } from 'lucide-react';
 import { CockpitBars, CockpitDonut } from '@/components/cockpit-charts';
 import { DashboardThemeToggle, useDashboardTheme } from '@/components/dashboard-theme';
 import './operations-center.css';
@@ -30,7 +31,10 @@ type View = 'summary' | 'agenda' | 'tasks' | 'alerts' | 'rooms' | 'activity';
 const roleLabels: Record<string, string> = { SUPER_ADMIN: 'Super Administrateur', OWNER: 'Propriétaire', GENERAL_MANAGER: 'Directeur général', HOTEL_ADMIN: 'Administrateur Hôtel', RECEPTIONIST: 'Réceptionniste', ACCOUNTANT: 'Comptable', GOUVERNANTE: 'Gouvernante', HOUSEKEEPER: 'Agent d’entretien', MAINTENANCE_MANAGER: 'Responsable maintenance', RESTAURANT_MANAGER: 'Responsable Restaurant et Bar', BAR_SERVER: 'Servant(e) du bar' };
 const kindLabels: Record<string, string> = { arrival: 'Arrivée', departure: 'Départ', housekeeping: 'Entretien', maintenance: 'Maintenance' };
 const statusLabels: Record<string, string> = { PENDING: 'En attente', CONFIRMED: 'Confirmée', CHECKED_IN: 'En séjour', IN_PROGRESS: 'En cours', READY_FOR_INSPECTION: 'é inspecter', OPEN: 'Ouvert', OCCUPIED: 'Occupée', AVAILABLE: 'Disponible', HIGH: 'Prioritaire', URGENT: 'Urgente' };
-const money = (value: string | number, currency: string) => new Intl.NumberFormat('fr-FR', { style: 'currency', currency }).format(Number(value) || 0);
+const money = (value: string | number, _currency: string) => {
+  void _currency;
+  return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'XAF' }).format(Number(value) || 0);
+};
 const changeLabel = (current: string, previous: string, currency: string) => {
   const currentValue = Number(current) || 0;
   const previousValue = Number(previous) || 0;
@@ -57,7 +61,8 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-export default function OperationsCenter({ name, roleCode, embedded = false }: { name?: string; roleCode?: string; embedded?: boolean }) {
+export default function OperationsCenter({ name, roleCode, embedded = false, hideRefresh = false }: { name?: string; roleCode?: string; embedded?: boolean; hideRefresh?: boolean }) {
+  const router = useRouter();
   const { theme, toggleTheme } = useDashboardTheme();
   const [data, setData] = useState<OperationsData | null>(null);
   const [view, setView] = useState<View>('summary');
@@ -99,6 +104,15 @@ export default function OperationsCenter({ name, roleCode, embedded = false }: {
   const chartMax = Math.max(1, ...(data?.trend.map((point) => Number(point.amount)) ?? [1]));
   const chartPoints = data?.trend.map((point, index) => `${data!.trend.length <= 1 ? 50 : (index / (data!.trend.length - 1)) * 100},${88 - (Number(point.amount) / chartMax) * 78}`).join(' ') ?? '';
 
+  async function logout() {
+    try {
+      const response = await fetch('/api/auth/logout', { method: 'POST' });
+      if (!response.ok) throw new Error('La déconnexion n’a pas abouti. Réessayez.');
+      router.push('/connexion');
+      router.refresh();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'La déconnexion a échoué.'); }
+  }
+
   async function markRead(id: string) {
     try { await request('/api/reception/notifications', { method: 'POST', body: JSON.stringify({ id }) }); await load(); }
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Action impossible.'); }
@@ -123,10 +137,9 @@ export default function OperationsCenter({ name, roleCode, embedded = false }: {
 
   const Root = embedded ? 'div' : 'main';
   return <Root className={`ops-shell${embedded ? ' ops-embedded' : ''}`} data-theme={theme} data-role={effectiveRoleCode}>
-    {!embedded && name && <ProfileLauncher name={name} />}
     <header className="ops-header">
       <div><p>BLISS HOTEL · CENTRE DE PILOTAGE</p><h1>Bonjour {activeName}</h1><span>{title} · données opérationnelles de la période</span></div>
-      <div className="ops-header-actions"><span className="ops-live"><i />Données en direct</span><button className="ops-button" onClick={() => void load()} disabled={busy}><RefreshCw size={15} className={busy ? 'ops-spin' : ''} />Actualiser</button>{!embedded && <DashboardThemeToggle theme={theme} onToggle={toggleTheme} />}{can('reports.export') || can('reports.financial.view') || can('shift_reports.view') ? <button className="ops-button ops-primary" onClick={exportReport}><Download size={15} />Exporter</button> : null}</div>
+      <div className="ops-header-actions"><span className="ops-live"><i />Données en direct</span>{!hideRefresh && <button className="ops-button" onClick={() => void load()} disabled={busy}><RefreshCw size={15} className={busy ? 'ops-spin' : ''} />Actualiser</button>}{!embedded && <DashboardThemeToggle theme={theme} onToggle={toggleTheme} />}{!embedded && name && <ProfileLauncher name={name} className="ops-profile-launcher" />}{!embedded && <button className="ops-button" onClick={() => void logout()}><LogOut size={15} />Déconnexion</button>}{can('reports.export') || can('reports.financial.view') || can('shift_reports.view') ? <button className="ops-button ops-primary" onClick={exportReport}><Download size={15} />Exporter</button> : null}</div>
     </header>
     <section className="ops-toolbar">
       <div className="ops-search"><Search size={17} /><input placeholder="Rechercher un client, une chambre ou une réservation" value={query} onChange={(event) => setQuery(event.target.value)} aria-label="Recherche globale" />{query && <button onClick={() => setQuery('')} aria-label="Effacer la recherche">é</button>}</div>

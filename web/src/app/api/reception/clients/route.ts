@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { authorizedScope } from '@/server/auth';
+import { authorizedClientReadScope, authorizedScope } from '@/server/auth';
 import { AppError } from '@/server/policy';
 import { db } from '@/server/db';
 import { findPossibleClientDuplicates } from '@/server/client-matching';
@@ -10,9 +10,11 @@ export const instant = false;
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
-    const scope = await authorizedScope('clients.view');
+    const scope = await authorizedClientReadScope();
     const query = url.searchParams.get('q')?.trim() ?? '';
-    const scopeWhere = scope.roleCode === 'HOTEL_ADMIN' ? { reservations: { some: { room: { is: { assignedHotelAdminId: scope.userId, active: true } } } } } : {};
+    const scopeWhere = scope.roleCode === 'HOTEL_ADMIN'
+      ? { reservations: { some: { room: { is: { assignedHotelAdminId: scope.userId, active: true } } } } }
+      : scope.roleCode === 'RECEPTIONIST' ? { createdBy: scope.userId } : {};
     const clients = await db.client.findMany({
       where: { AND: [scopeWhere, ...(query ? [{
           OR: [
@@ -25,7 +27,6 @@ export async function GET(request: Request) {
           ],
         }] : [])] },
       orderBy: { name: 'asc' },
-      take: 50,
       select: {
         id: true,
         name: true,

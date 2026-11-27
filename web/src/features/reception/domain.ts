@@ -85,7 +85,7 @@ export function siestaEndAt(actualCheckIn: Date) {
   return new Date(actualCheckIn.getTime() + 210 * 60_000);
 }
 
-export type StatPeriod = 'day' | 'week' | 'month';
+export type StatPeriod = 'day' | 'week' | 'month' | 'year';
 
 /** Calendar-period start, computed in the property's local timezone. */
 export function periodStartInTimeZone(period: StatPeriod, now: Date, timeZone: string) {
@@ -96,6 +96,8 @@ export function periodStartInTimeZone(period: StatPeriod, now: Date, timeZone: s
     startDay.setUTCDate(startDay.getUTCDate() - mondayOffset);
   } else if (period === 'month') {
     startDay.setUTCDate(1);
+  } else if (period === 'year') {
+    startDay.setUTCMonth(0, 1);
   }
   return localDateTimeToUtc(`${startDay.toISOString().slice(0, 10)}T00:00`, timeZone);
 }
@@ -162,6 +164,8 @@ export type PaymentRequestKey = {
   clientId?: string | null;
   paymentMethodId: string;
   amount: string;
+  inputAmount?: string | null;
+  inputCurrency?: string | null;
   reference: string | null;
   description?: string | null;
   receivedBy: string;
@@ -171,7 +175,10 @@ export function isSamePaymentRequest(existing: PaymentRequestKey, requested: Pay
   return existing.folioId === requested.folioId
     && (existing.clientId ?? null) === (requested.clientId ?? null)
     && existing.paymentMethodId === requested.paymentMethodId
-    && amountInCents(existing.amount) === amountInCents(requested.amount)
+    && (existing.inputAmount != null && requested.inputAmount != null
+      ? amountInCents(existing.inputAmount) === amountInCents(requested.inputAmount)
+        && (existing.inputCurrency ?? 'XAF') === (requested.inputCurrency ?? 'XAF')
+      : amountInCents(existing.amount) === amountInCents(requested.amount))
     && existing.reference === requested.reference
     && (existing.description ?? null) === (requested.description ?? null)
     && existing.receivedBy === requested.receivedBy;

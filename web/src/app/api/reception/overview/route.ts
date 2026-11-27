@@ -5,6 +5,7 @@ import { AppError } from '@/server/policy';
 import { db } from '@/server/db';
 import { hotelConfiguration } from '@/server/hotel';
 import { folioTotals, hotelDateKey, parseDateOnly, parseHotelDateTime, parsePeriod, periodRange } from '@/server/reception';
+import { convertFromXaf } from '@/server/currency';
 
 export const instant = false;
 
@@ -40,7 +41,7 @@ export async function GET(request: Request) {
       activeStays,
       roomGroups,
       housekeepingGroups,
-      openFolios,
+      allFolios,
       cashSession,
       paymentMethods,
       reservedRoomRows,
@@ -81,17 +82,25 @@ export async function GET(request: Request) {
           roomId: true,
           reference: true,
           stayType: true,
+          nightlyRate: true,
           checkOutDate: true,
           client: { select: { name: true } },
-          room: { select: { number: true } },
-          stay: { select: { checkedInAt: true, expectedCheckOutAt: true } },
+          room: { select: { number: true, nightlyRateMin: true, nightlyRateMax: true, category: { select: { nightlyRate: true } } } },
+          stay: { select: { roomId: true, checkedInAt: true, expectedCheckOutAt: true } },
         },
       }),
-      db.room.findMany({ select: { id: true, status: true, housekeepingStatus: true, technicalStatus: true } }),
+      db.room.findMany({ select: { id: true, number: true, floor: true, status: true, active: true, housekeepingStatus: true, technicalStatus: true, nightlyRateMin: true, nightlyRateMax: true, category: { select: { nightlyRate: true } } } }),
       db.room.groupBy({ by: ['housekeepingStatus'], _count: { _all: true } }),
       db.folio.findMany({
-        where: { status: 'OPEN' },
-        select: { lines: { select: { amount: true } }, payments: { select: { amount: true } } },
+        select: {
+          id: true,
+          lines: { select: { amount: true, restaurantOrderId: true } },
+          payments: { select: { amount: true } },
+          invoice: { select: { number: true, totalAmount: true } },
+          reservation: { select: { reference: true, client: { select: { name: true } }, room: { select: { number: true } } } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 500,
       }),
       db.cashSession.findFirst({
         where: { userId: scope.userId, status: 'OPEN' },
@@ -122,7 +131,7 @@ export async function GET(request: Request) {
         _count: { _all: true },
       }),
       db.payment.aggregate({
-        where: { receivedBy: scope.userId, createdAt: { gte: statsRange.start, lte: statsRange.end } },
+        where: { receivedBy: scope.userId, createdAt: { gte: statsRange.start, lte: statsRange.end }, amount: { gt: 0 } },
         _sum: { amount: true },
         _count: { id: true },
       }),
@@ -163,8 +172,17 @@ export async function GET(request: Request) {
     // Keep dayStart/dayEnd referenced for the fixed-day queue counters above.
     void dayStart; void dayEnd;
 
-    const unsettledFolios = openFolios.map(folioTotals).filter(({ balance }) => balance.gt(0));
+    const unsettledFolios = allFolios.map((folio) => ({ folio, ...folioTotals(folio) })).filter(({ balance }) => balance.gt(0));
     const pendingAmount = unsettledFolios.reduce((sum, { balance }) => sum.add(balance), new Prisma.Decimal(0));
+    const unpaidFolios = unsettledFolios.filter(({ folio }) => folio.lines.some((line) => line.restaurantOrderId)).slice(0, 8).map(({ folio, balance }) => ({
+      id: folio.id,
+      reference: folio.reservation?.reference ?? '',
+      clientName: folio.reservation?.client.name ?? 'Client hôtelier',
+      roomNumber: folio.reservation?.room?.number ?? null,
+      invoiceNumber: folio.invoice?.number ?? null,
+      restaurantAmount: folio.lines.filter((line) => line.restaurantOrderId).reduce((sum, line) => sum.add(line.amount), new Prisma.Decimal(0)).toFixed(2),
+      balance: balance.toFixed(2),
+    }));
     const departuresToday = activeStays.filter((reservation) => {
       const expected = reservation.stay?.expectedCheckOutAt;
       const departureDate = expected
@@ -180,6 +198,35 @@ export async function GET(request: Request) {
       expectedCheckOutAt: reservation.stay?.expectedCheckOutAt,
       stayType: reservation.stayType,
     }));
+    const roomById = new Map(roomGroups.map((room) => [room.id, room]));
+    const occupiedRooms = (await Promise.all(activeStays.flatMap((reservation) => {
+      const roomId = reservation.stay?.roomId ?? reservation.roomId;
+      const room = roomId ? roomById.get(roomId) : undefined;
+      if (!room) return [];
+      const departureToday = departuresToday.some((departure) => departure.id === reservation.id);
+      return [convertFromXaf(reservation.nightlyRate, configuration.currency).then((price) => ({
+        id: room.id, number: room.number, floor: room.floor, occupant: reservation.client.name, departureToday, price: price.toFixed(2),
+      }))];
+    }))).sort((a, b) => a.number.localeCompare(b.number, 'fr', { numeric: true }));
+    const occupiedRoomIdsForBoard = new Set(occupiedRooms.map((room) => room.id));
+    const vacantRooms = (await Promise.all(roomGroups
+      .filter((room) => !occupiedRoomIdsForBoard.has(room.id))
+      .map(async ({ id, number, floor, status, active, housekeepingStatus, technicalStatus, nightlyRateMin, nightlyRateMax, category }) => {
+        const minimum = await convertFromXaf(nightlyRateMin ?? category.nightlyRate, configuration.currency);
+        const maximum = await convertFromXaf(nightlyRateMax ?? category.nightlyRate, configuration.currency);
+        return {
+          id,
+          number,
+          floor,
+          state: !active || status === 'OUT_OF_SERVICE' || technicalStatus !== 'OPERATIONAL'
+            ? 'Indisponible'
+            : status === 'AVAILABLE' && housekeepingStatus === 'CLEAN'
+              ? 'Prête'
+              : 'À préparer',
+          priceMin: minimum.toFixed(2),
+          priceMax: maximum.toFixed(2),
+        };
+      }))).sort((a, b) => a.number.localeCompare(b.number, 'fr', { numeric: true }));
     const upcomingLimit = new Date(now.getTime() + 30 * 60_000);
     const siestaAlerts = activeStays
       .filter((reservation) => reservation.stayType === 'SIESTA' && reservation.stay?.expectedCheckOutAt)
@@ -209,6 +256,11 @@ export async function GET(request: Request) {
       cancelledReservations,
       todayArrivals,
       todayDepartures,
+      roomBoard: {
+        vacant: vacantRooms,
+        occupied: occupiedRooms,
+        departures: occupiedRooms.filter((room) => room.departureToday),
+      },
       inHouse: activeStays.length,
       rooms: { ...rooms, ...housekeeping, reserved: reservedRoomRows.length },
       stays: {
@@ -235,6 +287,7 @@ export async function GET(request: Request) {
       })),
       pendingPayments: unsettledFolios.length,
       pendingAmount: pendingAmount.toFixed(2),
+      unpaidFolios,
       cashSession: cashSession
         ? {
           id: cashSession.id,

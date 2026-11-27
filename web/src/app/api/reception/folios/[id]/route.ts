@@ -3,6 +3,8 @@ import { authorizedScope } from '@/server/auth';
 import { AppError } from '@/server/policy';
 import { db } from '@/server/db';
 import { folioTotals } from '@/server/reception';
+import { hotelConfiguration } from '@/server/hotel';
+import { convertFromXaf } from '@/server/currency';
 
 export const instant = false;
 
@@ -26,6 +28,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     });
     if (!folio) throw new AppError(404, 'Folio introuvable.');
     const totals = folioTotals(folio);
+    const configuration = await hotelConfiguration();
+    const paymentAmount = await convertFromXaf(totals.balance, configuration.currency);
     return NextResponse.json({
       folio: {
         id: folio.id,
@@ -59,12 +63,14 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
           id: folio.invoice.id,
           number: folio.invoice.number,
           payerName: folio.invoice.payerName,
+          currency: folio.invoice.currency,
           totalAmount: folio.invoice.totalAmount.toFixed(2),
           issuedAt: folio.invoice.issuedAt,
         } : null,
         billed: totals.billed.toFixed(2),
         paid: totals.paid.toFixed(2),
         balance: totals.balance.toFixed(2),
+        paymentAmount: paymentAmount.toFixed(2),
       },
     });
   } catch (error) {

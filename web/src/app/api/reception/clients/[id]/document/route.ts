@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authorizedScope } from '@/server/auth';
+import { authorizedClientReadScope, authorizedScope } from '@/server/auth';
 import { AppError } from '@/server/policy';
 import { db } from '@/server/db';
 
@@ -20,10 +20,10 @@ function failure(status: number, message: string) {
 /** Serves the ID scan privately: it is never written to a public folder. */
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const scope = await authorizedScope('clients.view');
+    const scope = await authorizedClientReadScope();
     const { id } = await params;
     const client = await db.client.findFirst({
-      where: { id, ...(scope.roleCode === 'HOTEL_ADMIN' ? { OR: [{ createdBy: scope.userId }, { reservations: { some: { room: { is: { assignedHotelAdminId: scope.userId, active: true } } } } }] } : {}) },
+      where: { id, ...(scope.roleCode === 'RECEPTIONIST' ? { createdBy: scope.userId } : {}), ...(scope.roleCode === 'HOTEL_ADMIN' ? { OR: [{ createdBy: scope.userId }, { reservations: { some: { room: { is: { assignedHotelAdminId: scope.userId, active: true } } } } }] } : {}) },
       select: { id: true, idDocumentMime: true, idDocumentData: true },
     });
     if (!client) throw new AppError(404, 'Client introuvable.');

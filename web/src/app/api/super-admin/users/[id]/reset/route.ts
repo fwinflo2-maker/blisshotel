@@ -2,10 +2,10 @@ import { randomBytes } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { db } from '@/server/db';
 import { hashToken } from '@/server/auth';
-import { platformApi } from '@/server/platform-admin';
+import { hotelManagementApi } from '@/server/platform-admin';
 
 export async function POST(_request: Request, { params }: { params: Promise<{ id: string }> }) {
-  return platformApi(async (actor) => {
+  return hotelManagementApi(async (actor) => {
     const { id } = await params;
     const user = await db.user.findUnique({ where: { id }, select: { id: true, email: true, active: true, platformAdmin: true, role: { select: { code: true } } } });
     if (!user || (!actor.platformAdmin && (user.platformAdmin || user.role?.code === 'OWNER'))) return NextResponse.json({ error: 'Compte introuvable.' }, { status: 404 });

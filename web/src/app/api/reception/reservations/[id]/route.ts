@@ -7,6 +7,7 @@ import { hotelConfiguration } from '@/server/hotel';
 import { countNights, hotelDateKey, lockAndCheckRoom, notifyReceptionStaff, parseDateOnly, parseHotelDateTime } from '@/server/reception';
 import { Prisma } from '@prisma/client';
 import { nightlyRatePolicy } from '@/features/reception/domain';
+import { convertToXaf } from '@/server/currency';
 
 export const instant = false;
 
@@ -34,8 +35,23 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     if (!parsed.success) return NextResponse.json({ error: 'Modification de réservation invalide.' }, { status: 400 });
     const { action, ...changes } = parsed.data;
     const scope = await authorizedScope(action === 'update' || action === 'move' ? 'reservations.update' : 'stays.extend');
-    const configuration = await hotelConfiguration();
     const { id } = await params;
+    const configuration = await hotelConfiguration();
+    const currentRate = changes.agreedRate
+      ? await db.reservation.findUnique({
+        where: { id },
+        select: { nightlyRate: true, inputNightlyRate: true, inputCurrency: true },
+      })
+      : null;
+    if (changes.agreedRate && !currentRate) throw new AppError(404, 'Réservation introuvable.');
+    const agreedRateIsUnchanged = Boolean(currentRate && changes.agreedRate
+      && (currentRate.inputNightlyRate ?? currentRate.nightlyRate).equals(changes.agreedRate)
+      && (currentRate.inputCurrency ?? 'XAF') === configuration.currency);
+    const convertedAgreedRate = changes.agreedRate
+      ? agreedRateIsUnchanged && currentRate
+        ? currentRate.nightlyRate
+        : await convertToXaf(changes.agreedRate, configuration.currency)
+      : null;
     const reservation = await db.$transaction(async (tx) => {
       const locked = await tx.$queryRaw<Array<{ id: string }>>`
         SELECT id FROM Reservation WHERE id = ${id} FOR UPDATE
@@ -91,7 +107,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       }
 
       if (action === 'extend') {
-        if (before.status !== 'CHECKED_IN' || !before.roomId || !folio || !changes.checkOutDate) {
+        if (before.status !== 'CHECKED_IN' || !before.roomId || !before.room || !folio || !changes.checkOutDate) {
           throw new AppError(409, 'Seul un séjour en cours peut être prolongé.');
         }
         if (before.stayType === 'SIESTA') {
@@ -136,6 +152,11 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
             createdBy: scope.userId,
           },
         });
+        await notifyReceptionStaff(
+          tx,
+          [scope.userId, before.createdBy],
+          `Séjour ${before.reference} prolongé de ${addedNights} nuit${addedNights > 1 ? 's' : ''} dans la chambre ${before.room.number} · ${extensionAmount.toFixed(2)} FCFA ajoutés au folio et à encaisser.`,
+        );
         await tx.auditLog.create({
           data: {
             actorId: scope.userId,
@@ -264,8 +285,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
         if (!client) throw new AppError(404, 'Client introuvable.');
       }
 
-      const nightlyRate = changes.agreedRate
-        ? new Prisma.Decimal(changes.agreedRate)
+      const nightlyRate = convertedAgreedRate
+        ? convertedAgreedRate
         : roomId === before.roomId
           ? before.nightlyRate
           : room.nightlyRateMin ?? room.category.nightlyRate;
@@ -283,6 +304,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       const totalAmount = before.stayType === 'SIESTA'
         ? nightlyRate
         : nightlyRate.mul(nights).toDecimalPlaces(2);
+      if (totalAmount.gt('99999999.99')) {
+        throw new AppError(400, 'Le total du séjour dépasse la limite comptable autorisée en XAF.');
+      }
       const updated = await tx.reservation.update({
         where: { id },
         data: {
@@ -295,6 +319,11 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
           adults,
           children,
           nightlyRate,
+          ...(changes.agreedRate
+            ? { inputNightlyRate: new Prisma.Decimal(changes.agreedRate), inputCurrency: configuration.currency }
+            : roomId !== before.roomId
+              ? { inputNightlyRate: nightlyRate, inputCurrency: 'XAF' }
+              : {}),
           rateReason,
           totalAmount,
         },

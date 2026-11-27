@@ -5,6 +5,12 @@ export class AppError extends Error {
 export function assertPlatformAccess(user: { platformAdmin: boolean }) {
   if (!user.platformAdmin) throw new AppError(403, 'Administration plateforme uniquement.');
 }
+export function assertPlatformAdmin(user: { platformAdmin: boolean }) {
+  if (!user.platformAdmin) throw new AppError(403, 'Fonction réservée au Super Administrateur.');
+}
+export function assertOwnerAccess(user: { platformAdmin: boolean; role?: { code: string } | null }) {
+  if (user.platformAdmin || user.role?.code !== 'OWNER') throw new AppError(403, 'Accès réservé au Propriétaire.');
+}
 export function assertRoomAssignmentManager(user: { platformAdmin: boolean; role?: { code: string } | null }) {
   if (!user.platformAdmin && user.role?.code !== 'OWNER') {
     throw new AppError(403, 'Seul le Propriétaire ou le Super Administrateur peut modifier les attributions de chambres.');

@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { authorizedScope } from '@/server/auth';
 import { AppError } from '@/server/policy';
@@ -8,7 +9,7 @@ import { presentRestaurantOrder, restaurantOrderInclude } from '@/server/restaur
 export const instant = false;
 
 const decisionSchema = z.object({
-  action: z.enum(['confirm', 'reject']),
+  action: z.enum(['confirm', 'reject', 'mark-read']),
   reservationId: z.string().min(1).optional(),
   reason: z.string().trim().min(3).max(500).optional(),
 });
@@ -19,11 +20,27 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const parsed = decisionSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return NextResponse.json({ error: 'Décision de réception invalide.' }, { status: 400 });
     const { id } = await params;
+    if (parsed.data.action === 'mark-read') {
+      const order = await db.restaurantOrder.findUnique({ where: { id }, select: { id: true, receptionReadAt: true } });
+      if (!order) throw new AppError(404, 'Commande restaurant introuvable.');
+      if (!order.receptionReadAt) {
+        await db.restaurantOrder.updateMany({
+          where: { id, receptionReadAt: null },
+          data: { receptionReadAt: new Date() },
+        });
+      }
+      return NextResponse.json({ ok: true });
+    }
     const result = await db.$transaction(async (tx) => {
       await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM RestaurantOrder WHERE id = ${id} FOR UPDATE`;
       const order = await tx.restaurantOrder.findUnique({ where: { id }, include: restaurantOrderInclude });
       if (!order) throw new AppError(404, 'Commande restaurant introuvable.');
-      if (order.status !== 'PENDING_RECEPTION') throw new AppError(409, 'Cette commande a déjà été traitée par la réception.');
+      if (parsed.data.action === 'mark-read') {
+        if (order.receptionReadAt) return order;
+        const readOrder = await tx.restaurantOrder.update({ where: { id }, data: { receptionReadAt: new Date() }, include: restaurantOrderInclude });
+        await tx.auditLog.create({ data: { actorId: scope.userId, action: 'RESTAURANT_ORDER_READ', result: 'SUCCESS', targetId: id, details: { number: order.number } } });
+        return readOrder;
+      }      if (order.status !== 'PENDING_RECEPTION') throw new AppError(409, 'Cette commande a déjà été traitée par la réception.');
 
       if (parsed.data.action === 'reject') {
         const rejected = await tx.restaurantOrder.update({
@@ -66,16 +83,28 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         throw new AppError(409, "Le client n'est plus enregistre dans cette chambre. Verifiez le sejour avant de confirmer.");
       }
       if (order.roomId && reservation.room.id !== order.roomId) throw new AppError(409, 'La chambre du sejour a change. Verifiez la commande avant de la confirmer.');
-      if (!reservation.folio || reservation.folio.status !== 'OPEN' || reservation.folio.invoice) {
+      if (!reservation.folio || reservation.folio.status !== 'OPEN') {
         throw new AppError(409, 'La facture du séjour est déjà émise ou le folio est clôturé.');
       }
       await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM Folio WHERE id = ${reservation.folio.id} FOR UPDATE`;
-      const currentFolio = await tx.folio.findUnique({ where: { id: reservation.folio.id }, include: { invoice: true } });
-      if (!currentFolio || currentFolio.status !== 'OPEN' || currentFolio.invoice) {
+      const currentFolio = await tx.folio.findUnique({ where: { id: reservation.folio.id }, include: { invoice: true, payments: { select: { amount: true } } } });
+      if (!currentFolio || currentFolio.status !== 'OPEN') {
         throw new AppError(409, 'Le folio ne peut plus recevoir cette commande.');
       }
+      if (currentFolio.invoice) {
+        const paid = currentFolio.payments.reduce((sum, payment) => sum.add(payment.amount), new Prisma.Decimal(0));
+        if (!currentFolio.invoice.totalAmount.sub(paid).gt(0)) {
+          throw new AppError(409, 'La facture du séjour est déjà réglée.');
+        }
+      }
+      const existingFolioLine = order.folioLine
+        ? await tx.folioLine.findUnique({ where: { restaurantOrderId: order.id }, select: { folioId: true } })
+        : null;
+      if (existingFolioLine && existingFolioLine.folioId !== currentFolio.id) {
+        throw new AppError(409, 'Cette commande est déjà imputée à un autre folio.');
+      }
       const now = new Date();
-      await tx.folioLine.create({
+      if (!existingFolioLine) await tx.folioLine.create({
         data: {
           folioId: currentFolio.id,
           type: 'SERVICE',
@@ -85,6 +114,18 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           restaurantOrderId: order.id,
         },
       });
+      if (currentFolio.invoice && !existingFolioLine) {
+        await tx.invoice.update({ where: { id: currentFolio.invoice.id }, data: { totalAmount: { increment: order.totalAmount } } });
+        await tx.auditLog.create({
+          data: {
+            actorId: scope.userId,
+            action: 'RESTAURANT_CHARGE_TO_UNPAID_INVOICE',
+            result: 'SUCCESS',
+            targetId: currentFolio.invoice.id,
+            details: { invoiceNumber: currentFolio.invoice.number, orderNumber: order.number, roomNumber: reservation.room.number, amount: order.totalAmount.toFixed(2) },
+          },
+        });
+      }
       const confirmed = await tx.restaurantOrder.update({
         where: { id },
         data: { status: 'CONFIRMED', reservationId: reservation.id, roomId: reservation.room.id, guestName: reservation.client.name, confirmedBy: scope.userId, confirmedByName: scope.name, confirmedAt: now },

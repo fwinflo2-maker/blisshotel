@@ -6,6 +6,7 @@
   place-items: center;
   background: transparent;
   animation: route-loading-appear 180ms ease-out both;
+  pointer-events: none;
 }
 .route-loading-card {
   display: grid;

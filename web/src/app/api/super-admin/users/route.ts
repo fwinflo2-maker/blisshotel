@@ -1,15 +1,19 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { db } from '@/server/db';
-import { platformApi } from '@/server/platform-admin';
+import { hotelManagementApi } from '@/server/platform-admin';
 
 export async function GET(request: Request) {
-  return platformApi(async (actor) => {
+  return hotelManagementApi(async (actor) => {
     const url = new URL(request.url);
     const query = url.searchParams.get('q')?.trim() ?? '';
+    const roleCode = url.searchParams.get('role')?.trim();
+    const status = url.searchParams.get('status');
     const users = await db.user.findMany({
       where: {
         ...(actor.platformAdmin ? {} : { platformAdmin: false, role: { isNot: { code: 'OWNER' } } }),
+        AND: roleCode ? [{ role: { is: { code: roleCode } } }] : [],
+        ...(status === 'active' ? { active: true } : status === 'suspended' ? { active: false } : {}),
         ...(query ? {
           OR: [
             { email: { contains: query } },
@@ -19,7 +23,7 @@ export async function GET(request: Request) {
         } : {}),
       },
       orderBy: { createdAt: 'desc' },
-      take: 100,
+      take: 300,
       select: {
         id: true,
         email: true,
@@ -51,7 +55,7 @@ const createSchema = z.object({
 
 /** Creates an individual account (never shared). One identifier per receptionist. */
 export async function POST(request: Request) {
-  return platformApi(async (actor) => {
+  return hotelManagementApi(async (actor) => {
     const parsed = createSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return NextResponse.json({ error: 'Nom, e-mail, mot de passe (12 caractères minimum) ou rôle invalide.' }, { status: 400 });
     const { name, email, password, roleCode } = parsed.data;
@@ -81,7 +85,7 @@ export async function POST(request: Request) {
 }
 
 export async function PATCH(request: Request) {
-  return platformApi(async (actor) => {
+  return hotelManagementApi(async (actor) => {
     const parsed = updateSchema.extend({ userId: z.string().min(1) }).safeParse(await request.json().catch(() => null));
     if (!parsed.success) return NextResponse.json({ error: 'Modification de compte invalide.' }, { status: 400 });
     const { userId, active, name, email, roleId } = parsed.data;

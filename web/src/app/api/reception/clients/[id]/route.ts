@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authorizedScope } from '@/server/auth';
+import { authorizedClientReadScope, authorizedScope } from '@/server/auth';
 import { AppError } from '@/server/policy';
 import { db } from '@/server/db';
 import { folioTotals } from '@/server/reception';
@@ -9,17 +9,16 @@ export const instant = false;
 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const scope = await authorizedScope('clients.view');
+    const scope = await authorizedClientReadScope();
     const { id } = await params;
     const client = await db.client.findFirst({
-      where: { id, ...(scope.roleCode === 'HOTEL_ADMIN' ? { OR: [{ createdBy: scope.userId }, { reservations: { some: { room: { is: { assignedHotelAdminId: scope.userId, active: true } } } } }] } : {}) },
+      where: { id, ...(scope.roleCode === 'RECEPTIONIST' ? { createdBy: scope.userId } : {}), ...(scope.roleCode === 'HOTEL_ADMIN' ? { OR: [{ createdBy: scope.userId }, { reservations: { some: { room: { is: { assignedHotelAdminId: scope.userId, active: true } } } } }] } : {}) },
       omit: { idDocumentData: true },
       include: {
         creator: { select: { name: true } },
         reservations: {
           ...(scope.roleCode === 'HOTEL_ADMIN' ? { where: { room: { is: { assignedHotelAdminId: scope.userId, active: true } } } } : {}),
           orderBy: { checkInDate: 'desc' },
-          take: 30,
           include: {
             room: { select: { number: true } },
             creator: { select: { name: true } },

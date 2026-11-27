@@ -172,10 +172,10 @@ export default function Home() {
           <a href="#securite">Sécurité</a>
         </nav>
 
-        <Link className="lp-header-cta" href="/connexion">
+        <a className="lp-header-cta" href="/connexion">
           Se connecter
           <ArrowRight size={15} />
-        </Link>
+        </a>
       </header>
 
       <section className="lp-hero">
@@ -198,10 +198,10 @@ export default function Home() {
               travaillent enfin sur les mêmes informations.
             </p>
             <div className="lp-hero-actions lp-rise lp-d4">
-              <Link className="lp-btn lp-btn-light" href="/connexion">
+              <a className="lp-btn lp-btn-light" href="/connexion">
                 Se connecter
                 <ArrowRight size={16} />
-              </Link>
+              </a>
               <a className="lp-btn lp-btn-ghost" href="#plateforme">
                 Découvrir le logiciel
               </a>
@@ -519,10 +519,10 @@ export default function Home() {
               </p>
             </div>
             <div className="lp-cta-actions">
-              <Link className="lp-btn lp-btn-solid" href="/connexion">
+              <a className="lp-btn lp-btn-solid" href="/connexion">
                 Se connecter
                 <ArrowRight size={16} />
-              </Link>
+              </a>
               <span className="lp-cta-note">
                 <LockKeyhole size={13} strokeWidth={2} />
                 Accès réservé aux équipes autorisées
@@ -547,7 +547,7 @@ export default function Home() {
             Réservations · Réception · Caisse · Service d’entretien — une seule source de vérité.
           </p>
           <div className="lp-footer-links">
-            <Link href="/connexion">Connexion</Link>
+            <a href="/connexion">Connexion</a>
             <span aria-hidden="true">·</span>
             <span>© 2026 Bliss Hotel</span>
           </div>

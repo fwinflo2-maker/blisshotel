@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
-import { authorizedScope } from '@/server/auth';
 import { db } from '@/server/db';
-import { platformApi } from '@/server/platform-admin';
+import { hotelManagementApi } from '@/server/platform-admin';
 
 export const instant = false;
 
@@ -11,9 +10,7 @@ function previousStatus(details: unknown) {
 }
 
 export async function GET(request: Request) {
-  return platformApi(async (actor) => {
-    if (!actor.platformAdmin) await authorizedScope('audit.view');
-
+  return hotelManagementApi(async (actor) => {
     const url = new URL(request.url);
     const rawPage = Number(url.searchParams.get('page') ?? 1);
     const page = Number.isSafeInteger(rawPage) && rawPage > 0 ? Math.min(rawPage, 10000) : 1;

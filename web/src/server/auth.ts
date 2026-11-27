@@ -40,7 +40,9 @@ export async function scopeFor(): Promise<Scope> {
   const directPermissions = isHotelAdmin
     ? await db.userPermission.findMany({ where: { userId: user.id, permissionCode: { in: [...hotelAdminDelegablePermissions] } }, select: { permissionCode: true } })
     : [];
-  const rolePermissions = user.role.permissions.map((permission) => permission.permissionCode);
+  const rolePermissions = user.role.permissions.map((permission) => permission.permissionCode).filter((code) =>
+    user.role?.code !== 'BAR_SERVER' || !['restaurant.menu.manage', 'restaurant.stock.manage'].includes(code),
+  );
   return {
     userId: user.id,
     name: user.name,
@@ -63,6 +65,13 @@ export async function authorizedScope(permission: PermissionCode): Promise<Scope
   const scope = await scopeFor();
   assertPermission(scope, permission);
   return scope;
+}
+export async function authorizedClientReadScope(): Promise<Scope> {
+  const session = await requireSession();
+  if (session.user.platformAdmin || ['GENERAL_MANAGER', 'ACCOUNTANT'].includes(session.user.role?.code ?? '')) {
+    return { userId: session.user.id, name: session.user.name, roleCode: session.user.platformAdmin ? 'SUPER_ADMIN' : session.user.role!.code, permissions: ['clients.view'] };
+  }
+  return authorizedScope('clients.view');
 }
 export async function pageScope(permission: PermissionCode) {
   await pageSession();

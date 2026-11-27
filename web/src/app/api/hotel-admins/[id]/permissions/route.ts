@@ -2,13 +2,13 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { hotelAdminDelegablePermissions } from '@/features/access/catalog';
 import { db } from '@/server/db';
-import { platformApi } from '@/server/platform-admin';
+import { hotelManagementApi } from '@/server/platform-admin';
 import { assertRoomAssignmentManager } from '@/server/policy';
 
 export const instant = false;
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
-  return platformApi(async (actor) => {
+  return hotelManagementApi(async (actor) => {
     assertRoomAssignmentManager(actor);
     const { id } = await params;
     const user = await db.user.findFirst({ where: { id, role: { code: 'HOTEL_ADMIN' } }, select: { id: true, name: true, email: true, delegatedPermissions: { select: { permissionCode: true } } } });
@@ -20,7 +20,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 const schema = z.object({ permissionCodes: z.array(z.enum(hotelAdminDelegablePermissions)).max(hotelAdminDelegablePermissions.length) });
 
 export async function PUT(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  return platformApi(async (actor) => {
+  return hotelManagementApi(async (actor) => {
     assertRoomAssignmentManager(actor);
     const { id } = await params;
     const parsed = schema.safeParse(await request.json().catch(() => null));

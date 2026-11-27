@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/server/db';
-import { platformApi } from '@/server/platform-admin';
+import { hotelManagementApi } from '@/server/platform-admin';
 
 export async function GET() {
-  return platformApi(async (actor) => {
+  return hotelManagementApi(async (actor) => {
     const [roles, permissions] = await Promise.all([
       db.role.findMany({
         where: actor.platformAdmin ? {} : { code: { notIn: ['SUPER_ADMIN', 'OWNER'] } },
@@ -15,7 +15,9 @@ export async function GET() {
     return NextResponse.json({
       roles: roles.map((role) => ({
         ...role,
-        permissions: role.permissions.map((permission) => permission.permissionCode),
+        permissions: role.permissions.map((permission) => permission.permissionCode).filter((code) =>
+          role.code !== 'BAR_SERVER' || !['restaurant.menu.manage', 'restaurant.stock.manage'].includes(code),
+        ),
       })),
       permissions,
     });

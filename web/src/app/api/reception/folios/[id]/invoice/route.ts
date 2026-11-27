@@ -40,7 +40,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       const number = `BH-${new Date().getFullYear()}-${randomBytes(4).toString('hex').toUpperCase()}`;
       const payerName = parsed.data.payerName ?? folio.reservation.client.name;
       const created = await tx.invoice.create({
-        data: { folioId: id, number, payerName, totalAmount: total },
+        data: { folioId: id, number, payerName, currency: 'XAF', totalAmount: total },
       });
       await tx.auditLog.create({
         data: {
@@ -48,13 +48,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           action: 'RECEPTION_INVOICE_ISSUE',
           result: 'SUCCESS',
           targetId: created.id,
-          details: { folioId: id, number, payerName, totalAmount: total.toFixed(2) },
+          details: { folioId: id, number, payerName, currency: 'XAF', totalAmount: total.toFixed(2) },
         },
       });
       return created;
     });
     return NextResponse.json({
-      invoice: { id: invoice.id, number: invoice.number, payerName: invoice.payerName, totalAmount: invoice.totalAmount.toFixed(2), issuedAt: invoice.issuedAt },
+      invoice: { id: invoice.id, number: invoice.number, payerName: invoice.payerName, currency: invoice.currency, totalAmount: invoice.totalAmount.toFixed(2), issuedAt: invoice.issuedAt },
     });
   } catch (error) {
     if (error instanceof AppError) return NextResponse.json({ error: error.message }, { status: error.status });

@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { Activity, AlertTriangle, BedDouble, Bell, CalendarDays, ChevronRight, ClipboardList, FileText, Home, LogOut, Menu, ShieldCheck, Wrench, X } from 'lucide-react';
 import { DashboardThemeToggle, useDashboardTheme } from '@/components/dashboard-theme';
+import BusinessActivityExplorer from '@/components/business-activity-explorer';
 import { CockpitBars, CockpitDonut } from '@/components/cockpit-charts';
 import OperationsCenter from '@/features/workspace/operations-center';
 import { useRouter } from 'next/navigation';
@@ -33,9 +34,13 @@ const labels: Record<string, string> = {
   OPEN: 'Ouvert', RESOLVED: 'Résolu', SUCCESS: 'Réussi', FAILURE: 'Échec',
 };
 const label = (value: string) => labels[value] ?? value.replaceAll('_', ' ').toLocaleLowerCase('fr-FR');
-const currencyLabel = (currency: string) => currency === 'XAF' ? 'FCFA' : currency;
+const currencyLabel = (_currency: string) => {
+  void _currency;
+  return 'XAF';
+};
 const dateText = (value: string | null | undefined) => value ? new Intl.DateTimeFormat('fr-FR', { dateStyle: 'medium' }).format(new Date(value)) : '—';
 const dateTime = (value: string | null | undefined) => value ? new Intl.DateTimeFormat('fr-FR', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '—';
+const oldestDashboardDate = () => { const date = new Date(); date.setFullYear(date.getFullYear() - 99); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; };
 const permissionNames: Record<string, string> = {
   'rooms.view': 'Consulter ses chambres', 'rooms.manage': 'Modifier les informations des chambres', 'rooms.rates.view': 'Consulter les tarifs',
   'reservations.view': 'Consulter les réservations', 'stays.view': 'Consulter les séjours', 'housekeeping.tasks.view': 'Consulter l’entretien',
@@ -48,7 +53,7 @@ export default function AdminHotelWorkspace({ name, permissions }: { name: strin
   const can = useCallback((permission: string) => permissions.includes(permission), [permissions]);
   const [section, setSection] = useState<Section>('dashboard');
   const [mobileNav, setMobileNav] = useState(false);
-  const [period, setPeriod] = useState<'day' | 'week' | 'month'>('day');
+  const [period, setPeriod] = useState<'day' | 'week' | 'month' | 'year'>('day');
   const [selectedDate, setSelectedDate] = useState('');
   const [overview, setOverview] = useState<Overview | null>(null);
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -159,13 +164,13 @@ export default function AdminHotelWorkspace({ name, permissions }: { name: strin
     </aside>
 
     <main className={styles.main}>
-      <header className={styles.topbar}><button className={styles.mobileMenu} onClick={() => setMobileNav(true)} aria-label="Ouvrir le menu"><Menu size={19} /></button><div><span>BLISS HOTEL</span><i>/</i><b>{title}</b></div><DashboardThemeToggle theme={theme} onToggle={toggleTheme} /></header>
+      <header className={styles.topbar}><button className={styles.mobileMenu} onClick={() => setMobileNav(true)} aria-label="Ouvrir le menu"><Menu size={19} /></button><div><span>BLISS HOTEL</span><i>/</i><b>{title}</b></div><DashboardThemeToggle theme={theme} onToggle={toggleTheme} /><button className={styles.topbarLogout} onClick={() => void logout()} aria-label="Déconnexion" title="Déconnexion"><LogOut size={16} /><span>Déconnexion</span></button></header>
       <div className={styles.content}>
-        <div className={styles.heading}><div><p>Votre périmètre de gestion</p><h1>{title}</h1><span>Uniquement les chambres attribuées à votre compte</span></div>{(section === 'dashboard' || section === 'reports') && <div className={styles.filters}><label>Période<select value={period} onChange={(event) => setPeriod(event.target.value as typeof period)}><option value="day">Jour</option><option value="week">7 jours</option><option value="month">Mois</option></select></label><label>Date<input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label></div>}</div>
+        <div className={styles.heading}><div><p>Votre périmètre de gestion</p><h1>{title}</h1><span>Uniquement les chambres attribuées à votre compte</span></div>{(section === 'dashboard' || section === 'reports') && <div className={styles.filters}><label>Période<select value={period} onChange={(event) => setPeriod(event.target.value as typeof period)}><option value="day">Jour</option><option value="week">Semaine</option><option value="month">Mois</option><option value="year">Année</option></select></label><label>Date de référence<input type="date" min={oldestDashboardDate()} value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label></div>}</div>
         {error && <div className={styles.alertError} role="alert"><AlertTriangle size={17} />{error}</div>}{notice && <div className={styles.alertSuccess} role="status">{notice}</div>}
         {busy && <div className={styles.loading}><span />Chargement…</div>}
 
-        {(section === 'dashboard' || section === 'reports') && overview && <DashboardSection data={overview} section={section} canFinancial={can('reports.financial.view')} canExport={can('reports.export')} openRooms={() => void loadSection('rooms')} />}
+        {(section === 'dashboard' || section === 'reports') && overview && <><BusinessActivityExplorer currency={overview.currency} /><DashboardSection data={overview} section={section} canFinancial={can('reports.financial.view')} canExport={can('reports.export')} openRooms={() => void loadSection('rooms')} /></>}
         {section === 'operations' && <OperationsCenter name={name} roleCode="HOTEL_ADMIN" />}
         {section === 'rooms' && <RoomsSection rooms={rooms} canEdit={can('rooms.manage')} canRates={can('rooms.rates.view')} selectRoom={setSelectedRoom} />}
         {section === 'reservations' && <ReservationsSection reservations={reservations} canSeeClients={can('clients.view')} />}

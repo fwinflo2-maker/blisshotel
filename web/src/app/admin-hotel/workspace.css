@@ -24,6 +24,8 @@
 .ah-topbar>div { display:flex; align-items:center; gap:10px; flex:1; color:var(--muted); font-size:11px; }
 .ah-topbar>div i { color:#c2ccd6; font-style:normal; }
 .ah-topbar>div b { color:var(--ink); font-size:12px; }
+.ah-topbarLogout { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:34px; padding:0 10px; border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--muted); font:inherit; font-size:10px; font-weight:750; cursor:pointer; }
+.ah-topbarLogout:hover { border-color:#e6c6c2; background:#fff7f6; color:#a44f47; }
 .ah-mobileMenu { display:none; width:35px; height:35px; place-items:center; border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--ink); }
 .ah-content { max-width:1500px; margin:0 auto; padding:30px clamp(18px,3vw,42px) 24px; }
 .ah-heading { display:flex; justify-content:space-between; align-items:flex-end; gap:20px; margin-bottom:22px; }
@@ -139,6 +141,8 @@
 @media (max-width:520px) {
   .ah-topbar { height:56px; padding:0 13px; }
   .ah-topbar>div span { display:none; }
+  .ah-topbarLogout { width:34px; min-width:34px; padding:0; }
+  .ah-topbarLogout span { display:none; }
   .ah-content { padding:18px 12px 20px; }
   .ah-heading h1 { font-size:23px; }
   .ah-roomGrid { grid-template-columns:1fr; }
@@ -172,3 +176,10 @@
 @keyframes ah-dashboard-enter { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
 @media(max-width:520px) { .ah-dashboardHero { min-height:110px; padding:17px; }.ah-dashboardHeroStat { min-width:78px; padding:10px; }.ah-dashboardHeroStat strong { font-size:22px; }.ah-dashboardHero::after { right:62px; } }
 @media(prefers-reduced-motion:reduce) { .ah-dashboardHero,.ah-metric { animation:none; transition:none; } }
+.ah-nav { gap:6px; padding:3px; }
+.ah-navItem { min-height:44px; border:1px solid transparent; transition:background .18s ease,border-color .18s ease,transform .18s ease,color .18s ease; }
+.ah-navItem:hover { transform:translateX(2px); background:#ffffff12; }
+.ah-navActive { border-color:#ffffff1a; background:#ffffff18; font-weight:750; }
+.ah-navItem:focus-visible,.ah-iconButton:focus-visible,.ah-button:focus-visible { outline:3px solid #8bd8cf; outline-offset:2px; }
+.ah-panel,.ah-metric { transition:box-shadow .18s ease,border-color .18s ease,transform .18s ease; }
+@media(max-width:760px) { .ah-nav { gap:5px; } .ah-navItem { min-height:42px; font-size:11px; } }

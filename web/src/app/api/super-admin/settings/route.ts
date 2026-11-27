@@ -1,15 +1,17 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { db } from '@/server/db';
-import { platformApi } from '@/server/platform-admin';
+import { hotelManagementApi } from '@/server/platform-admin';
+import { hotelCurrencySchema } from '@/features/hotel/currency';
 
 const settings = ['support_email'] as const;
 
 export async function GET() {
-  return platformApi(async (actor) => {
-    const [stored, hotel, database] = await Promise.all([
+  return hotelManagementApi(async (actor) => {
+    const [stored, hotel, usdRate, database] = await Promise.all([
       db.platformSetting.findMany({ where: { key: { in: [...settings] } } }),
       db.hotelConfiguration.findUnique({ where: { id: 1 } }),
+      db.currencyRate.findUnique({ where: { currency: 'USD' } }),
       db.$queryRaw<Array<{ ok: number }>>`SELECT 1 AS ok`,
     ]);
     const values = Object.fromEntries(stored.map(({ key, value }) => [key, value]));
@@ -20,25 +22,30 @@ export async function GET() {
         hotel: {
           name: hotel.name,
           currency: hotel.currency,
+          usdRate: usdRate ? {
+            xafPerUnit: usdRate.xafPerUnit.toFixed(6),
+            effectiveAt: usdRate.effectiveAt.toISOString(),
+            source: usdRate.source,
+          } : null,
           timezone: hotel.timezone,
           checkInTime: hotel.checkInTime,
           checkOutTime: hotel.checkOutTime,
           allowCheckoutWithBalance: hotel.allowCheckoutWithBalance,
         },
       },
-      ...(!actor.platformAdmin ? {} : { system: {
+      system: {
         version: process.env.npm_package_version ?? '0.1.0',
         environment: process.env.NODE_ENV ?? 'unknown',
         emailProvider: 'not_implemented',
         database: database[0]?.ok === 1 ? 'available' : 'unavailable',
-      } }),
+      },
     });
   });
 }
 
 const schema = z.object({
   supportEmail: z.union([z.literal(''), z.string().trim().email().max(191)]),
-  currency: z.literal('XAF'),
+  currency: hotelCurrencySchema,
   timezone: z.string().trim().min(1).max(64).refine((value) => {
     try {
       new Intl.DateTimeFormat('en-US', { timeZone: value });
@@ -53,7 +60,7 @@ const schema = z.object({
 });
 
 export async function PATCH(request: Request) {
-  return platformApi(async (actor) => {
+  return hotelManagementApi(async (actor) => {
     const parsed = schema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return NextResponse.json({ error: 'Paramètres invalides.' }, { status: 400 });
     const previous = await db.platformSetting.findUnique({ where: { key: 'support_email' } });

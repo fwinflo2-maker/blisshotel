@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/server/db';
-import { platformApi } from '@/server/platform-admin';
+import { hotelManagementApi } from '@/server/platform-admin';
 
 export async function GET(request: Request) {
-  return platformApi(async (actor) => {
+  return hotelManagementApi(async (actor) => {
     const params = new URL(request.url).searchParams;
     const platformAdminIds = actor.platformAdmin ? [] : (await db.user.findMany({ where: { platformAdmin: true }, select: { id: true } })).map(({ id }) => id);
     const rawPage = Number(params.get('page') ?? 1);

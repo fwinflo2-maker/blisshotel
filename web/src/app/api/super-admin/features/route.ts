@@ -2,10 +2,10 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { platformFeatures } from '@/features/access/catalog';
 import { db } from '@/server/db';
-import { platformApi } from '@/server/platform-admin';
+import { hotelManagementApi } from '@/server/platform-admin';
 
 export async function GET() {
-  return platformApi(async () => {
+  return hotelManagementApi(async () => {
     const stored = await db.platformFeature.findMany();
     const storedByKey = new Map(stored.map((feature) => [feature.key, feature]));
     return NextResponse.json({
@@ -24,7 +24,7 @@ export async function GET() {
 const updateSchema = z.object({ key: z.string().min(1).max(100), enabled: z.boolean() });
 
 export async function PATCH(request: Request) {
-  return platformApi(async (actor) => {
+  return hotelManagementApi(async (actor) => {
     const parsed = updateSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return NextResponse.json({ error: 'Modification de fonctionnalité invalide.' }, { status: 400 });
     const feature = platformFeatures.find((item) => item.key === parsed.data.key);

@@ -123,4 +123,19 @@ describe('règles de séjour', () => {
       { ...request, folioId: null, clientId: 'client-2', description: 'Acompte' },
     )).toBe(false);
   });
+
+  it('compare les montants de saisie d’origine pour tolérer un changement de taux lors d’une reprise', () => {
+    const request = {
+      folioId: 'folio-1',
+      paymentMethodId: 'mtn',
+      amount: '6559.57',
+      inputAmount: '10.00',
+      inputCurrency: 'EUR',
+      reference: 'TX-1',
+      receivedBy: 'user-1',
+    };
+    expect(isSamePaymentRequest(request, { ...request, amount: '6600.00' })).toBe(true);
+    expect(isSamePaymentRequest(request, { ...request, inputAmount: '11.00' })).toBe(false);
+    expect(isSamePaymentRequest(request, { ...request, inputCurrency: 'USD' })).toBe(false);
+  });
 });

@@ -3,15 +3,18 @@ import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { db } from '@/server/db';
 import { AppError } from '@/server/policy';
-import { platformApi } from '@/server/platform-admin';
+import { hotelManagementApi } from '@/server/platform-admin';
+import { hotelConfiguration } from '@/server/hotel';
+import { convertFromXaf, convertToXaf } from '@/server/currency';
 
 export const instant = false;
 
 const money = z.string().regex(/^(?:0|[1-9]\d{0,7})(?:\.\d{1,2})?$/);
 
 export async function GET() {
-  return platformApi(async () => {
-    const [categories, rooms, paymentMethods] = await Promise.all([
+  return hotelManagementApi(async () => {
+    const [configuration, categories, rooms, paymentMethods] = await Promise.all([
+      hotelConfiguration(),
       db.roomCategory.findMany({
         orderBy: { name: 'asc' },
         include: { _count: { select: { rooms: true } } },
@@ -25,17 +28,19 @@ export async function GET() {
       }),
       db.paymentMethod.findMany({ orderBy: { name: 'asc' } }),
     ]);
-    return NextResponse.json({
-      categories: categories.map((category) => ({
+    const [presentedCategories, presentedRooms] = await Promise.all([
+      Promise.all(categories.map(async (category) => ({
         id: category.id,
         name: category.name,
         capacity: category.capacity,
-        nightlyRate: category.nightlyRate.toFixed(2),
-        siestaRate: category.siestaRate?.toFixed(2) ?? null,
+        nightlyRate: (await convertFromXaf(category.nightlyRate, configuration.currency)).toFixed(2),
+        siestaRate: category.siestaRate
+          ? (await convertFromXaf(category.siestaRate, configuration.currency)).toFixed(2)
+          : null,
         active: category.active,
         roomCount: category._count.rooms,
-      })),
-      rooms: rooms.map((room) => ({
+      }))),
+      Promise.all(rooms.map(async (room) => ({
         id: room.id,
         number: room.number,
         floor: room.floor,
@@ -53,9 +58,18 @@ export async function GET() {
         photos: room.photos,
         categoryId: room.categoryId,
         category: room.category.name,
-        nightlyRateMin: room.nightlyRateMin?.toFixed(2) ?? null,
-        nightlyRateMax: room.nightlyRateMax?.toFixed(2) ?? null,
-      })),
+        nightlyRateMin: room.nightlyRateMin
+          ? (await convertFromXaf(room.nightlyRateMin, configuration.currency)).toFixed(2)
+          : null,
+        nightlyRateMax: room.nightlyRateMax
+          ? (await convertFromXaf(room.nightlyRateMax, configuration.currency)).toFixed(2)
+          : null,
+      }))),
+    ]);
+    return NextResponse.json({
+      currency: configuration.currency,
+      categories: presentedCategories,
+      rooms: presentedRooms,
       paymentMethods: paymentMethods.map((method) => ({
         id: method.id,
         code: method.code,
@@ -96,10 +110,17 @@ const postSchema = z.discriminatedUnion('entity', [
 ]);
 
 export async function POST(request: Request) {
-  return platformApi(async (actor) => {
+  return hotelManagementApi(async (actor) => {
     const parsed = postSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return NextResponse.json({ error: 'Données d’inventaire invalides.' }, { status: 400 });
     const input = parsed.data;
+    const configuration = await hotelConfiguration();
+    const categoryNightlyRate = input.entity === 'category'
+      ? await convertToXaf(input.nightlyRate, configuration.currency)
+      : null;
+    const categorySiestaRate = input.entity === 'category' && input.siestaRate
+      ? await convertToXaf(input.siestaRate, configuration.currency)
+      : null;
 
     const result = await db.$transaction(async (tx) => {
       if (input.entity === 'category') {
@@ -109,8 +130,8 @@ export async function POST(request: Request) {
           data: {
             name: input.name,
             capacity: input.capacity,
-            nightlyRate: new Prisma.Decimal(input.nightlyRate),
-            siestaRate: input.siestaRate ? new Prisma.Decimal(input.siestaRate) : null,
+            nightlyRate: categoryNightlyRate!,
+            siestaRate: categorySiestaRate,
           },
         });
         return { id: created.id, name: created.name };
@@ -191,10 +212,23 @@ const patchSchema = z.discriminatedUnion('entity', [
 ]);
 
 export async function PATCH(request: Request) {
-  return platformApi(async (actor) => {
+  return hotelManagementApi(async (actor) => {
     const parsed = patchSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return NextResponse.json({ error: 'Modification d’inventaire invalide.' }, { status: 400 });
     const input = parsed.data;
+    const configuration = await hotelConfiguration();
+    const categoryNightlyRate = input.entity === 'category' && input.nightlyRate !== undefined
+      ? await convertToXaf(input.nightlyRate, configuration.currency)
+      : undefined;
+    const categorySiestaRate = input.entity === 'category' && 'siestaRate' in input && input.siestaRate
+      ? await convertToXaf(input.siestaRate, configuration.currency)
+      : undefined;
+    const roomNightlyRateMin = input.entity === 'room' && input.nightlyRateMin
+      ? await convertToXaf(input.nightlyRateMin, configuration.currency)
+      : undefined;
+    const roomNightlyRateMax = input.entity === 'room' && input.nightlyRateMax
+      ? await convertToXaf(input.nightlyRateMax, configuration.currency)
+      : undefined;
 
     const updated = await db.$transaction(async (tx) => {
       if (input.entity === 'category') {
@@ -205,9 +239,9 @@ export async function PATCH(request: Request) {
           data: {
             ...(input.name !== undefined ? { name: input.name } : {}),
             ...(input.capacity !== undefined ? { capacity: input.capacity } : {}),
-            ...(input.nightlyRate !== undefined ? { nightlyRate: new Prisma.Decimal(input.nightlyRate) } : {}),
+            ...(categoryNightlyRate !== undefined ? { nightlyRate: categoryNightlyRate } : {}),
             ...('siestaRate' in input && input.siestaRate !== undefined
-              ? { siestaRate: input.siestaRate ? new Prisma.Decimal(input.siestaRate) : null }
+              ? { siestaRate: categorySiestaRate ?? null }
               : {}),
             ...(input.active !== undefined ? { active: input.active } : {}),
           },
@@ -220,8 +254,8 @@ export async function PATCH(request: Request) {
           const duplicate = await tx.room.findUnique({ where: { number: input.number }, select: { id: true } });
           if (duplicate) throw new AppError(409, 'Ce numéro de chambre existe déjà.');
         }
-        const nextMin = input.nightlyRateMin === undefined ? before.nightlyRateMin : input.nightlyRateMin ? new Prisma.Decimal(input.nightlyRateMin) : null;
-        const nextMax = input.nightlyRateMax === undefined ? before.nightlyRateMax : input.nightlyRateMax ? new Prisma.Decimal(input.nightlyRateMax) : null;
+        const nextMin = input.nightlyRateMin === undefined ? before.nightlyRateMin : input.nightlyRateMin ? roomNightlyRateMin! : null;
+        const nextMax = input.nightlyRateMax === undefined ? before.nightlyRateMax : input.nightlyRateMax ? roomNightlyRateMax! : null;
         if ((nextMin && nextMax && nextMin.gt(nextMax)) || Boolean(nextMin) !== Boolean(nextMax)) {
           throw new AppError(400, 'Configurez les deux bornes tarifaires et vérifiez que le minimum ne dépasse pas le maximum.');
         }
@@ -300,7 +334,7 @@ export async function PATCH(request: Request) {
     });
 
     await db.auditLog.create({
-      data: { actorId: actor.id, action: 'PLATFORM_INVENTORY_UPDATE', result: 'SUCCESS', targetId: parsed.data.id, details: { entity: parsed.data.entity, ...(parsed.data.entity === 'room' && (parsed.data.nightlyRateMin !== undefined || parsed.data.nightlyRateMax !== undefined) ? { pricingChange: true, nightlyRateMin: parsed.data.nightlyRateMin, nightlyRateMax: parsed.data.nightlyRateMax } : {}), ...(parsed.data.entity === 'method' ? { paymentMethodChange: { name: parsed.data.name, active: parsed.data.active } } : {}) } },
+      data: { actorId: actor.id, action: 'PLATFORM_INVENTORY_UPDATE', result: 'SUCCESS', targetId: parsed.data.id, details: { entity: parsed.data.entity, ...(parsed.data.entity === 'room' && (parsed.data.nightlyRateMin !== undefined || parsed.data.nightlyRateMax !== undefined) ? { pricingChange: true, nightlyRateMin: parsed.data.nightlyRateMin, nightlyRateMax: parsed.data.nightlyRateMax, inputCurrency: configuration.currency } : {}), ...(parsed.data.entity === 'method' ? { paymentMethodChange: { name: parsed.data.name, active: parsed.data.active } } : {}) } },
     });
     return NextResponse.json({ ok: true, item: { id: updated.id } });
   });

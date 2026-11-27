@@ -5,6 +5,7 @@ import { db } from '@/server/db';
 import { hotelDateKey, parseDateOnly } from '@/server/reception';
 import { hotelConfiguration } from '@/server/hotel';
 import { nightlyRatePolicy } from '@/features/reception/domain';
+import { convertFromXaf } from '@/server/currency';
 import { z } from 'zod';
 
 export const instant = false;
@@ -22,6 +23,10 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'La période doit être comprise entre 1 et 62 jours.' }, { status: 400 });
     }
 
+    const breakfast = await db.restaurantMenuItem.findUnique({
+      where: { code: 'BREAKFAST_ROOM_NIGHT' },
+      select: { active: true, price: true },
+    });
     const rooms = await db.room.findMany({
       where: { active: true, ...roomAssignmentWhere(scope) },
       orderBy: [{ floor: 'asc' }, { number: 'asc' }],
@@ -75,26 +80,34 @@ export async function GET(request: Request) {
       restaurantBilled: stay.folio?.lines.filter((line) => line.restaurantOrderId !== null).reduce((sum, line) => sum + Number(line.amount), 0) ?? 0,
       folioBalance: stay.folio ? Math.max(0, stay.folio.lines.reduce((sum, line) => sum + Number(line.amount), 0) - stay.folio.payments.reduce((sum, payment) => sum + Number(payment.amount), 0)) : 0,
     }] as const] : []));
-    return NextResponse.json({
-      from: startText,
-      to: endText,
-      rooms: rooms.map((room) => {
-        const isHotelAdmin = scope.roleCode === 'HOTEL_ADMIN';
-        const canSeeTasks = !isHotelAdmin || scope.permissions.includes('housekeeping.tasks.view');
-        const canSeeMaintenance = !isHotelAdmin || scope.permissions.includes('maintenance.view');
-        const visibleReservations = room.reservations.filter((reservation) => !isHotelAdmin
-          || scope.permissions.includes('reservations.view')
-          || (scope.permissions.includes('stays.view') && reservation.status === 'CHECKED_IN'));
-        const currentStay = guestByRoom.get(room.id);
-        const currentGuest = currentStay?.name ?? null;
-        const nightlyMinimum = (room.nightlyRateMin ?? room.category.nightlyRate).toFixed(2);
-        const nightlyMaximum = (room.nightlyRateMax ?? room.category.nightlyRate).toFixed(2);
-        const ratePolicy = nightlyRatePolicy(nightlyMinimum, nightlyMaximum);
-        const reason = [
-          ...(canSeeTasks && room.housekeepingTasks[0] ? [room.housekeepingTasks[0].title, room.housekeepingTasks[0].notes] : []),
-          ...(canSeeMaintenance ? [room.statusHistory[0]?.reason, room.incidents[0]?.title] : []),
-        ].filter(Boolean).join(' · ');
-        return {
+    const presentedRooms = await Promise.all(rooms.map(async (room) => {
+      const isHotelAdmin = scope.roleCode === 'HOTEL_ADMIN';
+      const canSeeTasks = !isHotelAdmin || scope.permissions.includes('housekeeping.tasks.view');
+      const canSeeMaintenance = !isHotelAdmin || scope.permissions.includes('maintenance.view');
+      const canSeeRates = !isHotelAdmin || scope.permissions.includes('rooms.rates.view');
+      const currentStay = guestByRoom.get(room.id);
+      const currentGuest = currentStay?.name ?? null;
+      const nightlyMinimum = (room.nightlyRateMin ?? room.category.nightlyRate).toFixed(2);
+      const nightlyMaximum = (room.nightlyRateMax ?? room.category.nightlyRate).toFixed(2);
+      const policyInXaf = nightlyRatePolicy(nightlyMinimum, nightlyMaximum);
+      const [minimum, maximum, categoryRate, breakfastPrice] = canSeeRates
+        ? await Promise.all([
+          convertFromXaf(policyInXaf.minimum, configuration.currency),
+          convertFromXaf(policyInXaf.maximum, configuration.currency),
+          convertFromXaf(room.category.nightlyRate, configuration.currency),
+          breakfast?.active ? convertFromXaf(breakfast.price, configuration.currency) : Promise.resolve(null),
+        ])
+        : [null, null, null, null];
+      const ratePolicy = {
+        ...policyInXaf,
+        minimum: minimum?.toFixed(2) ?? policyInXaf.minimum,
+        maximum: maximum?.toFixed(2) ?? policyInXaf.maximum,
+      };
+      const reason = [
+        ...(canSeeTasks && room.housekeepingTasks[0] ? [room.housekeepingTasks[0].title, room.housekeepingTasks[0].notes] : []),
+        ...(canSeeMaintenance ? [room.statusHistory[0]?.reason, room.incidents[0]?.title] : []),
+      ].filter(Boolean).join(' · ');
+      return {
         id: room.id,
         number: room.number,
         floor: room.floor,
@@ -112,13 +125,15 @@ export async function GET(request: Request) {
         folioBalance: currentStay?.folioBalance ?? 0,
         category: room.category.name,
         capacity: room.category.capacity,
-        ...(isHotelAdmin && !scope.permissions.includes('rooms.rates.view') ? {} : {
-          nightlyRateMin: ratePolicy.minimum,
-          nightlyRateMax: ratePolicy.maximum,
-          optionalMeal: ratePolicy.optionalMeal,
-          nightlyRate: room.category.nightlyRate.toFixed(2),
+        ...(!canSeeRates ? {} : {
+          nightlyRateMin: minimum!.toFixed(2),
+          nightlyRateMax: maximum!.toFixed(2),
+          nightlyRate: categoryRate!.toFixed(2),
+          breakfastPriceInput: breakfastPrice?.toFixed(2) ?? null,
         }),
-        reservations: visibleReservations.map((reservation) => ({
+        reservations: room.reservations.filter((reservation) => !isHotelAdmin
+          || scope.permissions.includes('reservations.view')
+          || (scope.permissions.includes('stays.view') && reservation.status === 'CHECKED_IN')).map((reservation) => ({
           ...reservation,
           checkInDate: reservation.checkInDate.toISOString().slice(0, 10),
           checkOutDate: reservation.checkOutDate.toISOString().slice(0, 10),
@@ -130,7 +145,12 @@ export async function GET(request: Request) {
           } : null,
           ...(reservation.status === 'CHECKED_IN' ? { client: { name: reservation.client.name } } : {}),
         })),
-      }; }),
+      };
+    }));
+    return NextResponse.json({
+      from: startText,
+      to: endText,
+      rooms: presentedRooms,
     });
   } catch (error) {
     if (error instanceof AppError) return NextResponse.json({ error: error.message }, { status: error.status });

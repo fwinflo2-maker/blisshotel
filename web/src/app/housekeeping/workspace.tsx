@@ -241,7 +241,6 @@ export default function HousekeepingWorkspace({ name, role }: { name: string; ro
 
   return (
     <main className="housekeeping-shell" data-theme={theme}>
-      <ProfileLauncher name={name} />
       <header className="housekeeping-topbar">
         <div className="housekeeping-brand">
           <span className="housekeeping-brand-mark"><Sparkles size={18} /></span>
@@ -251,6 +250,7 @@ export default function HousekeepingWorkspace({ name, role }: { name: string; ro
           <span><strong>{name}</strong><small>{roleLabel}</small></span>
           <a className="housekeeping-operations-link" href="/pilotage">Centre de pilotage</a>
           <DashboardThemeToggle theme={theme} onToggle={toggleTheme} />
+          <ProfileLauncher name={name} className="housekeeping-profile-launcher" />
           <button className="housekeeping-logout" type="button" onClick={() => void logout()} aria-label="Se déconnecter" title="Se déconnecter"><LogOut size={17} /></button>
         </div>
       </header>

@@ -1,12 +1,13 @@
 'use client';
 
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity, ArrowLeftRight, BedDouble, Bell, CalendarDays, Check, CircleDollarSign,
   ClipboardList, CreditCard, DoorOpen, FileText, History, LogOut, Menu, Plus, Search, Utensils,
   ShieldAlert, UserRound, Users, Wallet, X,
 } from 'lucide-react';
 import { DashboardThemeToggle, useDashboardTheme } from '@/components/dashboard-theme';
+import BusinessActivityExplorer from '@/components/business-activity-explorer';
 import { CockpitBars, CockpitDonut } from '@/components/cockpit-charts';
 import OperationsCenter from '@/features/workspace/operations-center';
 import { useRouter } from 'next/navigation';
@@ -16,8 +17,8 @@ import type { ShiftExpenseDraft, ShiftReport, ShiftReportCloseInput } from '@/fe
 import './reception.css';
 
 type HotelConfiguration = { id: number; name: string; currency: string; timezone: string; checkInTime: string | null; checkOutTime: string | null; allowCheckoutWithBalance: boolean };
-type Section = 'overview' | 'operations' | 'reservations' | 'stays' | 'clients' | 'folios' | 'restaurantOrders' | 'planning' | 'cash' | 'activity' | 'notifications' | 'profile';
-type StatPeriod = 'day' | 'week' | 'month';
+type Section = 'overview' | 'roomStatus' | 'operations' | 'reservations' | 'stays' | 'clients' | 'folios' | 'restaurantOrders' | 'planning' | 'cash' | 'activity' | 'notifications' | 'profile';
+type StatPeriod = 'day' | 'week' | 'month' | 'year';
 type PaymentMethod = { id: string; code: string; name: string };
 type Overview = {
   today: string;
@@ -29,6 +30,11 @@ type Overview = {
   cancelledReservations: number;
   todayArrivals: { id: string; reference: string; status: string; client: { name: string }; room: { number: string } | null }[];
   todayDepartures: { id: string; reference: string; client: { name: string }; room: { number: string } | null; expectedCheckOutAt: string | null; stayType: 'SIESTA' | 'OVERNIGHT' }[];
+  roomBoard: {
+    vacant: { id: string; number: string; floor: string | null; state: string; priceMin: string; priceMax: string }[];
+    occupied: { id: string; number: string; floor: string | null; occupant: string; departureToday: boolean; price: string }[];
+    departures: { id: string; number: string; floor: string | null; occupant: string; departureToday: boolean; price: string }[];
+  };
   inHouse: number;
   rooms: { total: number; available: number; occupied: number; dirty: number; outOfService: number; reserved: number; toClean: number; inProgress: number; toInspect: number; maintenance: number };
   stays: {
@@ -42,6 +48,7 @@ type Overview = {
   teamActivity: { id: string; action: string; actor: string; createdAt: string; targetId: string | null }[];
   pendingPayments: number;
   pendingAmount: string;
+  unpaidFolios: { id: string; reference: string; clientName: string; roomNumber: string | null; invoiceNumber: string | null; restaurantAmount: string; balance: string }[];
   cashSession: { id: string; openingAmount: string; openedAt: string; cashBalance: string } | null;
   paymentMethods: PaymentMethod[];
   permissions: string[];
@@ -49,8 +56,16 @@ type Overview = {
 type Client = { id: string; name: string; phone: string | null; email: string | null; nationality?: string | null; address?: string | null; idType?: string | null; idNumber?: string | null; notes?: string | null; idDocumentName?: string | null; idDocumentUploadedAt?: string | null; idDocument?: { name: string; mime: string | null; size: number | null; uploadedAt: string | null; uploadedBy: string | null } | null; createdAt?: string; createdBy?: string | null; createdByName?: string | null; creator?: { name: string } | null; _count?: { reservations: number } };
 type ActivityEvent = { id: string; action: string; result: string; targetId: string | null; details: unknown; createdAt: string; mine: boolean; actor: string };
 type NotificationItem = { id: string; message: string; readAt: string | null; createdAt: string };
-type FolioListItem = { id: string; status: string; paymentStatus: 'paid' | 'partial' | 'unpaid'; billed: string; paid: string; balance: string; invoice: { id: string; number: string; payerName: string | null; totalAmount: string; issuedAt: string } | null; reservation: { id: string; reference: string; status: string; stayType: 'SIESTA' | 'OVERNIGHT'; createdByName: string | null; checkInDate: string; checkOutDate: string; client: { id: string; name: string; phone: string | null }; room: string | null } };
-type RestaurantOrder = { id: string; number: string; source: 'ROOM_SERVICE' | 'RESTAURANT'; status: string; guestName: string; notes: string | null; totalAmount: string; createdAt: string; room: { id: string; number: string } | null; reservation: { id: string; reference: string; checkInDate: string; checkOutDate: string; client: { name: string; phone: string | null } } | null; lines: { id: string; name: string; category: string; billingUnit: string; quantity: number; unitPrice: string; lineTotal: string }[] };
+type FolioListItem = { id: string; status: string; paymentStatus: 'paid' | 'partial' | 'unpaid'; billed: string; paid: string; balance: string; invoice: { id: string; number: string; payerName: string | null; currency: string; totalAmount: string; issuedAt: string } | null; reservation: { id: string; reference: string; status: string; stayType: 'SIESTA' | 'OVERNIGHT'; createdByName: string | null; checkInDate: string; checkOutDate: string; client: { id: string; name: string; phone: string | null }; room: string | null } };
+type RestaurantOrder = { id: string; number: string; source: 'ROOM_SERVICE' | 'RESTAURANT'; status: string; receptionReadAt: string | null; guestName: string; createdByName: string; notes: string | null; totalAmount: string; createdAt: string; room: { id: string; number: string } | null; reservation: { id: string; reference: string; checkInDate: string; checkOutDate: string; client: { name: string; phone: string | null } } | null; lines: { id: string; name: string; category: string; billingUnit: string; quantity: number; unitPrice: string; lineTotal: string }[] };
+const restaurantOrderStatusLabels: Record<string, string> = {
+  PENDING_RECEPTION: 'À confirmer par la réception',
+  CONFIRMED: 'Ajoutée au folio',
+  PREPARING: 'En préparation',
+  READY: 'Prête',
+  SERVED: 'Servie',
+  REJECTED: 'Refusée',
+};
 type Reservation = {
   id: string;
   reference: string;
@@ -67,6 +82,7 @@ type Reservation = {
   adults: number;
   children: number;
   nightlyRate: string;
+  nightlyRateInput: string | null;
   rateReason: string | null;
   totalAmount: string;
   checkedInAt: string | null;
@@ -91,8 +107,9 @@ type Room = {
   capacity: number | null;
   nightlyRateMin: string;
   nightlyRateMax: string;
-  optionalMeal: { code: 'BREAKFAST' | 'LUNCH'; name: string; price: string } | null;
   nightlyRate: string;
+  breakfastPriceInput?: string | null;
+  optionalMeal?: { code: 'BREAKFAST' | 'LUNCH'; name: string; price: string } | null;
   reservations: {
     id: string;
     reference: string;
@@ -112,10 +129,11 @@ type Folio = {
   reservation: { id: string; reference: string; status: string; stayType: 'SIESTA' | 'OVERNIGHT'; checkInDate: string; checkOutDate: string; client: Client; room: string | null };
   lines: { id: string; type: string; description: string; amount: string; createdAt: string }[];
   payments: { id: string; amount: string; method: string; methodCode: string; reference: string | null; createdAt: string }[];
-  invoice: { id: string; number: string; payerName: string | null; totalAmount: string; issuedAt: string } | null;
+  invoice: { id: string; number: string; payerName: string | null; currency: string; totalAmount: string; issuedAt: string } | null;
   billed: string;
   paid: string;
   balance: string;
+  paymentAmount: string;
 };
 type CashSession = {
   id: string;
@@ -149,6 +167,7 @@ const navigation: { id: Section; label: string; icon: typeof BedDouble }[] = [
   { id: 'stays', label: 'Réception / Séjours', icon: DoorOpen },
   { id: 'clients', label: 'Clients', icon: Users },
   { id: 'folios', label: 'Factures', icon: FileText },
+  { id: 'roomStatus', label: 'État des chambres', icon: BedDouble },
   { id: 'restaurantOrders', label: 'Commandes restaurant', icon: Utensils },
   { id: 'planning', label: 'Planning chambres', icon: BedDouble },
   { id: 'cash', label: 'Ma caisse', icon: Wallet },
@@ -156,6 +175,40 @@ const navigation: { id: Section; label: string; icon: typeof BedDouble }[] = [
   { id: 'notifications', label: 'Notifications', icon: Bell },
   { id: 'profile', label: 'Mon profil', icon: UserRound },
 ];
+
+const permissionLabels: Record<string, string> = {
+  'dashboard.view': 'Consulter le tableau de bord',
+  'clients.create': 'Créer des fiches client',
+  'clients.update': 'Modifier les fiches client',
+  'clients.view': 'Consulter les clients',
+  'folios.manage': 'Gérer les folios',
+  'folios.view': 'Consulter les folios',
+  'invoices.create': 'Créer des factures',
+  'invoices.view': 'Consulter les factures',
+  'payments.collect': 'Enregistrer les paiements',
+  'payments.view': 'Consulter les paiements',
+  'reservations.cancel': 'Annuler les réservations',
+  'reservations.confirm': 'Confirmer les réservations',
+  'reservations.create': 'Créer des réservations',
+  'reservations.update': 'Modifier les réservations',
+  'reservations.view': 'Consulter les réservations',
+  'restaurant.folio.transfer': 'Transférer les commandes restaurant aux folios',
+  'rooms.block': 'Bloquer des chambres',
+  'rooms.release': 'Remettre les chambres en service',
+  'rooms.view': 'Consulter les chambres',
+  'shift_reports.view': 'Consulter les rapports de service',
+  'stays.checkin': 'Enregistrer les arrivées',
+  'stays.checkout': 'Enregistrer les départs',
+  'stays.extend': 'Prolonger les séjours',
+  'stays.view': 'Consulter les séjours',
+  'cash_sessions.close_own': 'Clôturer ma session de caisse',
+  'cash_sessions.open_own': 'Ouvrir ma session de caisse',
+  'cash_sessions.view_own': 'Consulter ma session de caisse',
+};
+
+function permissionLabel(code: string) {
+  return permissionLabels[code] ?? code.replaceAll('.', ' ').replaceAll('_', ' ');
+}
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -176,7 +229,12 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
   return data;
 }
 
-function formatMoney(value: string | number, currency: string) {
+function formatMoney(value: string | number, _currency: string) {
+  void _currency;
+  return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'XAF' }).format(Number(value));
+}
+
+function formatInputMoney(value: string | number, currency: string) {
   return new Intl.NumberFormat('fr-FR', { style: 'currency', currency }).format(Number(value));
 }
 
@@ -184,8 +242,8 @@ function roomNightlyRateLabel(room: Room, currency: string) {
   const minimum = Number(room.nightlyRateMin);
   const maximum = Number(room.nightlyRateMax);
   return minimum === maximum
-    ? `${formatMoney(room.nightlyRateMin, currency)} / nuit`
-    : `${formatMoney(room.nightlyRateMin, currency)} – ${formatMoney(room.nightlyRateMax, currency)} / nuit`;
+    ? `${formatInputMoney(room.nightlyRateMin, currency)} / nuit`
+    : `${formatInputMoney(room.nightlyRateMin, currency)} – ${formatInputMoney(room.nightlyRateMax, currency)} / nuit`;
 }
 
 function formatDate(value: string) {
@@ -228,6 +286,7 @@ function statusLabel(status: string) {
     OUT_OF_SERVICE: 'Hors service',
     OPEN: 'Ouverte',
     CLOSED: 'Clôturée',
+    UNPAID: 'À encaisser',
   };
   return labels[status] ?? status;
 }
@@ -309,6 +368,8 @@ export default function ReceptionWorkspace({ name, configuration, account }: { n
     agreedRate: '',
     rateReason: '',
     includeBreakfast: false,
+    includeCommission: false,
+    breakfastName: 'Petit-déjeuner',
     adults: 1,
     children: 0,
   });
@@ -421,10 +482,10 @@ export default function ReceptionWorkspace({ name, configuration, account }: { n
     setPlanner((current) => current.from
       ? current
       : { from: data.today, to: addDays(data.today, 7) });
-    setPaymentForm((current) => ({
-      ...current,
-      paymentMethodId: current.paymentMethodId || data.paymentMethods[0]?.id || '',
-    }));
+    setPaymentForm((current) => {
+      const paymentMethodId = current.paymentMethodId || data.paymentMethods[0]?.id || '';
+      return paymentMethodId === current.paymentMethodId ? current : { ...current, paymentMethodId };
+    });
   }, [statPeriod]);
 
   const loadNotifications = useCallback(async () => {
@@ -453,7 +514,7 @@ export default function ReceptionWorkspace({ name, configuration, account }: { n
   }, []);
 
   const loadRestaurantOrders = useCallback(async () => {
-    const data = await api<{ orders: RestaurantOrder[] }>('/api/restaurant/orders?pending=true');
+    const data = await api<{ orders: RestaurantOrder[] }>('/api/restaurant/orders?roomOrders=true');
     setRestaurantOrders(data.orders);
   }, []);
 
@@ -494,6 +555,7 @@ export default function ReceptionWorkspace({ name, configuration, account }: { n
     const data = await api<{ folio: Folio }>(`/api/reception/folios/${encodeURIComponent(folioId)}`);
     setSelectedFolio(data.folio);
     setInvoicePayerName(data.folio.invoice?.payerName ?? data.folio.reservation.client.name);
+    setPaymentForm((current) => current.amount ? current : { ...current, amount: data.folio.paymentAmount });
   }, []);
 
   async function openFolioFromList(folioId: string) {
@@ -501,6 +563,7 @@ export default function ReceptionWorkspace({ name, configuration, account }: { n
     setError('');
     setNotice('');
     try {
+      setPaymentForm((current) => ({ ...current, amount: '' }));
       await loadFolio(folioId);
       setNotice('Folio ouvert.');
       window.requestAnimationFrame(() => {
@@ -522,8 +585,8 @@ export default function ReceptionWorkspace({ name, configuration, account }: { n
       setError('');
     }
     try {
-      void loadNotifications();
-      if (section === 'overview') await loadOverview();
+      await loadNotifications().catch(() => undefined);
+      if (section === 'overview' || section === 'roomStatus') await Promise.all([loadOverview(), loadRooms()]);
       if (section === 'reservations') {
         await Promise.all([loadReservations(search, reservationFilter), loadClients(), loadOverview()]);
       }
@@ -538,7 +601,6 @@ export default function ReceptionWorkspace({ name, configuration, account }: { n
       if (section === 'folios') await Promise.all([loadFolioList(folioFilter), loadOverview()]);
       if (section === 'restaurantOrders') await loadRestaurantOrders();
       if (section === 'activity') await loadActivity(activityFilters);
-      if (section === 'notifications') await loadNotifications();
       if (section === 'folios' && selectedFolioId) await loadFolio(selectedFolioId);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Impossible de charger cette section.');
@@ -554,6 +616,16 @@ export default function ReceptionWorkspace({ name, configuration, account }: { n
   }, [loadSection]);
 
   useEffect(() => {
+    if (section !== 'restaurantOrders') return;
+    const timer = window.setInterval(() => {
+      void loadRestaurantOrders().catch((reason: unknown) => {
+        setError(reason instanceof Error ? reason.message : 'Impossible de charger les commandes restaurant.');
+      });
+    }, 30000);
+    return () => window.clearInterval(timer);
+  }, [section, loadRestaurantOrders]);
+
+  useEffect(() => {
     if (!showTransitionOverlay || busy) return;
     const timer = window.setTimeout(() => setShowTransitionOverlay(false), 350);
     return () => window.clearTimeout(timer);
@@ -566,7 +638,7 @@ export default function ReceptionWorkspace({ name, configuration, account }: { n
       backgroundRefreshInProgress.current = true;
       void loadSection(false).finally(() => { backgroundRefreshInProgress.current = false; });
     };
-    const timer = window.setInterval(refresh, 5_000);
+    const timer = window.setInterval(refresh, 30_000);
     document.addEventListener('visibilitychange', refresh);
     return () => {
       window.clearInterval(timer);
@@ -659,9 +731,7 @@ export default function ReceptionWorkspace({ name, configuration, account }: { n
     }
   }
 
-  async function createClient(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const formElement = event.currentTarget;
+  async function submitClientCreation(formElement?: HTMLFormElement) {
     setError('');
     setNotice('');
     let possibleDuplicates: Pick<Client, 'id' | 'name' | 'phone' | 'email' | 'createdByName'>[];
@@ -693,10 +763,22 @@ export default function ReceptionWorkspace({ name, configuration, account }: { n
       if (clientIdScan) await uploadIdDocument(data.client.id, clientIdScan);
       setClientForm({ name: '', phone: '', email: '', nationality: '', address: '', idType: '', idNumber: '', notes: '' });
       setClientIdScan(null);
-      formElement.reset();
+      formElement?.reset();
       setReservationForm((current) => ({ ...current, clientId: data.client.id }));
-      if (section !== 'clients') setSection('clients');
     }, clientIdScan ? 'Fiche client créée et scan de la pièce d’identité enregistré.' : 'Fiche client créée.', clientIdScan ? 'Enregistrement du client et téléversement du scan…' : 'Enregistrement du client…', Boolean(clientIdScan));
+  }
+
+  async function createClient(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await submitClientCreation(event.currentTarget);
+  }
+
+  async function createClientFromReservation() {
+    if (clientForm.name.trim().length < 2) {
+      setError('Saisissez le nom complet du client (au moins 2 caractères).');
+      return;
+    }
+    await submitClientCreation();
   }
 
   function beginClientEdit(client: Client) {
@@ -766,6 +848,13 @@ export default function ReceptionWorkspace({ name, configuration, account }: { n
     }, 'Notifications marquées comme lues.');
   }
 
+  async function markNotificationRead(id: string) {
+    await runAction(async () => {
+      await api('/api/reception/notifications', { method: 'POST', body: JSON.stringify({ id }) });
+      await loadNotifications();
+    }, 'Notification marquée comme lue.');
+  }
+
   async function changePassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!window.confirm('Modifier votre mot de passe ? Toutes vos sessions seront déconnectées.')) return;
@@ -809,7 +898,7 @@ export default function ReceptionWorkspace({ name, configuration, account }: { n
           idempotencyKey: crypto.randomUUID(),
         }),
       });
-      setReservationForm((current) => ({ ...current, roomId: '', agreedRate: '', rateReason: '', includeBreakfast: false }));
+      setReservationForm((current) => ({ ...current, roomId: '', agreedRate: '', rateReason: '', includeBreakfast: false, includeCommission: false, breakfastName: 'Petit-déjeuner' }));
     }, hasRoom ? 'Réservation créée et folio initialisé.' : 'Réservation créée sans chambre ; tarif à définir à l’attribution.');
   }
 
@@ -844,13 +933,22 @@ export default function ReceptionWorkspace({ name, configuration, account }: { n
     }, action === 'confirm' ? 'Commande confirmee et ajoutee au folio.' : 'Commande refusee ; aucun montant ne sera facture.');
   }
 
+  async function markRestaurantOrderRead(order: RestaurantOrder) {
+    await runAction(async () => {
+      await api(`/api/restaurant/orders/${encodeURIComponent(order.id)}/reception`, { method: 'POST', body: JSON.stringify({ action: 'mark-read' }) });
+      setRestaurantOrders((current) => current.map((item) => item.id === order.id
+        ? { ...item, receptionReadAt: new Date().toISOString() }
+        : item));
+    }, 'Commande marquée comme lue.');
+  }
+
   function beginReservationEdit(reservation: Reservation, mode: EditingReservation['mode']) {
     setReservationEditForm({
       roomId: reservation.room?.id ?? '',
       clientId: reservation.client.id,
       checkInDate: reservation.checkInDate,
       checkOutDate: reservation.checkOutDate,
-      agreedRate: reservation.room ? reservation.nightlyRate : '',
+      agreedRate: reservation.room ? reservation.nightlyRateInput ?? reservation.nightlyRate : '',
       rateReason: reservation.rateReason ?? '',
       adults: reservation.adults,
       children: reservation.children,
@@ -897,6 +995,7 @@ export default function ReceptionWorkspace({ name, configuration, account }: { n
         method: 'PATCH',
         body: JSON.stringify(body),
       });
+      if (mode === 'extend') await loadNotifications();
       setEditingReservation(null);
     }, mode === 'extend'
       ? 'Séjour prolongé et prestation ajoutée au folio.'
@@ -916,6 +1015,7 @@ export default function ReceptionWorkspace({ name, configuration, account }: { n
     setBusyMessage('Ouverture du folio…');
     setError('');
     try {
+      setPaymentForm((current) => ({ ...current, amount: '' }));
       await loadFolio(reservation.folio.id);
       navigate('folios');
     } catch (reason) {
@@ -950,7 +1050,7 @@ export default function ReceptionWorkspace({ name, configuration, account }: { n
         method: 'POST',
         body: JSON.stringify({ payerName }),
       });
-    }, 'Facture créée. Elle est maintenant disponible pour impression sur rouleau 80 mm.');
+    }, 'Facture créée. Elle est disponible au format A4 pour impression ou enregistrement PDF.');
   }
 
   async function collectPayment(event: FormEvent<HTMLFormElement>) {
@@ -959,7 +1059,7 @@ export default function ReceptionWorkspace({ name, configuration, account }: { n
       setError('Ouvrez votre session de caisse avant d’encaisser.');
       return;
     }
-    if (!window.confirm(`Encaisser ${formatMoney(paymentForm.amount, configuration.currency)} pour ${selectedFolio.reservation.reference} ?`)) return;
+    if (!window.confirm(`Encaisser ${formatInputMoney(paymentForm.amount, configuration.currency)} pour ${selectedFolio.reservation.reference} ?`)) return;
     await runAction(async () => {
       const data = await api<{ payment: { amount: string; method: string; reference: string | null; createdAt: string } }>('/api/reception/payments', {
         method: 'POST',
@@ -1006,6 +1106,7 @@ export default function ReceptionWorkspace({ name, configuration, account }: { n
       setShiftExpenses([]);
       setIncidentNotes('');
       setHandoverNotes('');
+      setShiftReports((items) => [data.report, ...items.filter((report) => report.id !== data.report.id)]);
       setSelectedShiftReport(data.report);
     }, 'Caisse clôturée et rapport de service enregistré.');
   }
@@ -1072,7 +1173,7 @@ export default function ReceptionWorkspace({ name, configuration, account }: { n
             <button key={id} className={`reception-nav-item${section === id ? ' is-active' : ''}`} onClick={() => navigate(id)}>
               <Icon size={17} /><span>{label}</span>
               {id === 'notifications' && unreadCount > 0 && <em className="reception-nav-badge">{unreadCount}</em>}
-              {id === 'restaurantOrders' && restaurantOrders.length > 0 && <em className="reception-nav-badge">{restaurantOrders.length}</em>}
+              {id === 'restaurantOrders' && restaurantOrders.filter((order) => !order.receptionReadAt).length > 0 && <em className="reception-nav-badge">{restaurantOrders.filter((order) => !order.receptionReadAt).length}</em>}
             </button>
           ))}
         </nav>
@@ -1103,8 +1204,9 @@ export default function ReceptionWorkspace({ name, configuration, account }: { n
           {busy && <div className="reception-loading" role="status" aria-live="polite">{busyMessage}</div>}
 
           <div className="reception-section-view" key={section}>
-          {section === 'overview' && <OverviewSection data={overview} currency={configuration.currency} timezone={configuration.timezone} navigate={navigate} period={statPeriod} setPeriod={(next) => { setStatPeriod(next); }} />}
-          {section === 'operations' && <OperationsCenter name={name} roleCode="RECEPTIONIST" />}
+          {section === 'overview' && <OverviewSection data={overview} rooms={rooms} currency={configuration.currency} timezone={configuration.timezone} navigate={navigate} setFolioFilter={setFolioFilter} period={statPeriod} setPeriod={(next) => { setStatPeriod(next); }} />}
+          {section === 'roomStatus' && <RoomStatusSection board={overview?.roomBoard ?? null} currency={configuration.currency} />}
+          {section === 'operations' && <OperationsCenter name={name} roleCode="RECEPTIONIST" embedded hideRefresh />}
           {section === 'reservations' && <ReservationsSection
             data={reservations}
             clients={clients}
@@ -1114,6 +1216,12 @@ export default function ReceptionWorkspace({ name, configuration, account }: { n
             availabilityError={roomAvailability.error}
             form={reservationForm}
             setForm={setReservationForm}
+            newClientForm={clientForm}
+            setNewClientForm={setClientForm}
+            newClientScan={clientIdScan}
+            setNewClientScan={setClientIdScan}
+            createClient={createClientFromReservation}
+            canCreateClient={(overview?.permissions ?? []).includes('clients.create')}
             permissions={overview?.permissions ?? []}
             search={search}
             setSearch={setSearch}
@@ -1132,7 +1240,6 @@ export default function ReceptionWorkspace({ name, configuration, account }: { n
             openFolio={(item) => void openFolio(item)}
             history={(item) => void openReservationHistory(item)}
             move={(item) => beginMove(item)}
-            goClients={() => navigate('clients')}
             currency={configuration.currency}
             timezone={configuration.timezone}
             checkOutTime={configuration.checkOutTime}
@@ -1195,16 +1302,34 @@ export default function ReceptionWorkspace({ name, configuration, account }: { n
               setPayment={setPaymentForm}
               collect={collectPayment}
               openReservations={() => navigate('reservations')}
+              openCash={() => navigate('cash')}
             />
             </div>
           </>}
           {section === 'restaurantOrders' && <section className="reception-panel reception-restaurant-orders">
-            <div className="reception-panel-heading"><div><p>À VALIDER AVANT FACTURATION</p><h2>Commandes restaurant en attente</h2></div><Utensils size={18} /></div>
+            <div className="reception-panel-heading"><div><p>COMMANDES DES CLIENTS EN CHAMBRE</p><h2>Commandes restaurant</h2></div><Utensils size={18} /></div>
+            {notifications.some((item) => item.message.startsWith('Consommation ')) && <div className="reception-restaurant-notifications">
+              <div className="reception-restaurant-notifications-heading"><strong>Notifications restaurant</strong><span>Non lues : {notifications.filter((item) => item.message.startsWith('Consommation ') && !item.readAt).length}</span></div>
+              {notifications.filter((item) => item.message.startsWith('Consommation ')).map((item) => <article className={item.readAt ? '' : 'is-unread'} key={item.id}>
+                <div><p>{item.message}</p><time>{formatDateTime(item.createdAt, configuration.timezone)}</time></div>
+                {!item.readAt && <button className="reception-button" onClick={() => void markNotificationRead(item.id)}>Marquer comme lue</button>}
+              </article>)}
+            </div>}
             {restaurantOrders.length ? <div className="reception-restaurant-order-list">{restaurantOrders.map((order) => <article className="reception-restaurant-order" key={order.id}>
-              <header><div><strong>{order.number} · {order.room ? `Chambre ${order.room.number}` : 'Chambre à rattacher'}</strong><span>{order.reservation?.client.name ?? (order.room ? 'Client de la chambre' : order.guestName)} · {order.source === 'ROOM_SERVICE' ? 'Dans la chambre' : 'Au bar-restaurant'} · {formatDateTime(order.createdAt, configuration.timezone)}</span></div><b>{formatMoney(order.totalAmount, configuration.currency)}</b></header>
+              <header><div><strong>{order.number} · {order.room ? `Chambre ${order.room.number}` : 'Chambre à rattacher'}</strong><span>{order.reservation?.client.name ?? (order.room ? 'Client de la chambre' : order.guestName)} · {order.source === 'ROOM_SERVICE' ? 'Dans la chambre' : 'Au bar-restaurant'} · Par {order.createdByName} · {formatDateTime(order.createdAt, configuration.timezone)}</span><span className="reception-status">{restaurantOrderStatusLabels[order.status] ?? order.status}</span></div><b>{formatMoney(order.totalAmount, configuration.currency)}</b></header>
               <ul>{order.lines.map((line) => <li key={line.id}><span>{line.name}{line.billingUnit === 'ROOM_NIGHT' ? ` · ${line.quantity} nuitée(s)` : ` · × ${line.quantity}`}</span><strong>{formatMoney(line.lineTotal, configuration.currency)}</strong></li>)}</ul>
-              <footer><span>{order.reservation ? `Sejour ${order.reservation.reference}` : 'Aucun séjour actif n’était lié à cette commande lors de sa saisie. Elle ne peut pas être imputée sans risquer de facturer un autre client.'} | {formatMoney(order.totalAmount, configuration.currency)}{order.reservation ? ' sera ajoute au folio.' : ''} Aucun paiement au bar.</span><div><button className="reception-button danger" onClick={() => void decideRestaurantOrder(order, 'reject')}>Refuser</button><button className="reception-button primary" disabled={!order.reservation} onClick={() => void decideRestaurantOrder(order, 'confirm')}>Confirmer et ajouter au folio</button></div></footer>
-            </article>)}</div> : <EmptyState text="Aucune commande n’attend la confirmation de la réception." />}
+              <footer>
+                <span>{order.status === 'PENDING_RECEPTION'
+                  ? (order.reservation ? `Séjour ${order.reservation.reference} · ${formatMoney(order.totalAmount, configuration.currency)} à ajouter au folio.` : 'Aucun séjour actif n’était lié à cette commande lors de sa saisie. Elle ne peut pas être imputée sans risquer de facturer un autre client.')
+                  : `Commande ${order.status === 'REJECTED' ? 'refusée' : 'enregistrée'} · ${formatMoney(order.totalAmount, configuration.currency)}${order.status === 'REJECTED' ? '' : ' au folio.'}`}
+                </span>
+                {order.status === 'PENDING_RECEPTION' && <div>
+                  <button className="reception-button danger" onClick={() => void decideRestaurantOrder(order, 'reject')}>Refuser</button>
+                  <button className="reception-button primary" disabled={!order.reservation} onClick={() => void decideRestaurantOrder(order, 'confirm')}>Valider et ajouter au folio</button>
+                </div>}
+              </footer>
+              {!order.receptionReadAt && <button type="button" className="reception-button reception-order-read-button" onClick={() => void markRestaurantOrderRead(order)}>Marquer comme lue</button>}
+            </article>)}</div> : <EmptyState text="Aucune commande de chambre enregistrée." />}
           </section>}
           {section === 'planning' && <PlanningSection
             data={rooms}
@@ -1282,7 +1407,6 @@ export default function ReceptionWorkspace({ name, configuration, account }: { n
       {invoicePrintOpen && selectedFolio?.invoice && <InvoicePrintDialog
         data={selectedFolio}
         hotelName={configuration.name}
-        currency={configuration.currency}
         timezone={configuration.timezone}
         close={() => setInvoicePrintOpen(false)}
       />}
@@ -1300,7 +1424,7 @@ export default function ReceptionWorkspace({ name, configuration, account }: { n
   );
 }
 
-function OverviewSection({ data, currency, timezone, navigate, period, setPeriod }: { data: Overview | null; currency: string; timezone: string; navigate: (section: Section) => void; period: StatPeriod; setPeriod: (period: StatPeriod) => void }) {
+function OverviewSection({ data, rooms, currency, timezone, navigate, setFolioFilter, period, setPeriod }: { data: Overview | null; rooms: Room[]; currency: string; timezone: string; navigate: (section: Section) => void; setFolioFilter: (status: string) => void; period: StatPeriod; setPeriod: (period: StatPeriod) => void }) {
   if (!data) return (
     <div className="reception-overview-loading" role="status" aria-label="Chargement des données de l’établissement">
       <div className="reception-metrics">
@@ -1333,8 +1457,9 @@ function OverviewSection({ data, currency, timezone, navigate, period, setPeriod
     ['À inspecter', data.rooms.toInspect, 'inspect'],
     ['En maintenance / hors service', data.rooms.maintenance, 'out-of-service'],
   ] as const;
-  const periodLabels: Record<StatPeriod, string> = { day: 'Jour', week: 'Semaine', month: 'Mois' };
+  const periodLabels: Record<StatPeriod, string> = { day: 'Jour', week: 'Semaine', month: 'Mois', year: 'Année' };
   return <>
+    <BusinessActivityExplorer currency={currency} timezone={timezone} />
     <div className="reception-period-filter" role="group" aria-label="Période des statistiques personnelles">
       <span>Période d’analyse (statistiques personnelles) :</span>
       {(Object.keys(periodLabels) as StatPeriod[]).map((value) => <button key={value} type="button" className={`reception-chip${period === value ? ' is-active' : ''}`} onClick={() => setPeriod(value)}>{periodLabels[value]}</button>)}
@@ -1350,8 +1475,18 @@ function OverviewSection({ data, currency, timezone, navigate, period, setPeriod
       ]} onSelect={() => navigate('planning')} /><p className="reception-chart-note">Sélectionnez une catégorie pour ouvrir le planning des chambres.</p></article>
       <article className="reception-panel reception-chart-panel"><div className="reception-panel-heading"><div><p>FLUX DU JOUR</p><h2>Arrivées & départs</h2></div><Activity size={18} /></div><CockpitBars rows={[{ label: 'Arrivées', value: data.arrivals, color: '#5896d0' }, { label: 'Départs', value: data.departures, color: '#c6a878' }]} /><p className="reception-chart-note">Comptage selon les dates d’arrivée et de départ prévues aujourd’hui.</p><button className="reception-link-button" onClick={() => navigate('stays')}>Ouvrir les opérations de séjour →</button></article>
     </div>
+    <article className="reception-panel reception-room-board">
+      <div className="reception-panel-heading"><div><p>ÉTAT DES CHAMBRES · SERVICE DU JOUR</p><h2>Chambres libres, occupées et à libérer</h2></div><BedDouble size={18} /></div>
+      <div className="reception-room-board-grid">
+        <section><strong className="is-vacant">Chambres vides · {data.roomBoard.vacant.length}</strong>{data.roomBoard.vacant.length ? <ul>{data.roomBoard.vacant.map((room) => <li key={room.id}><span><b>Ch. {room.number}</b><small>{room.state}{room.floor ? ` · Étage ${room.floor}` : ''}</small><small>Tarif : {room.priceMin === room.priceMax ? formatMoney(room.priceMin, currency) : `${formatMoney(room.priceMin, currency)} – ${formatMoney(room.priceMax, currency)}`}</small></span></li>)}</ul> : <p>Aucune chambre vide.</p>}</section>
+        <section><strong className="is-occupied">Occupées · {data.roomBoard.occupied.length}</strong>{data.roomBoard.occupied.length ? <ul>{data.roomBoard.occupied.map((room) => <li key={room.id}><span><b>Ch. {room.number}</b><small>{room.occupant}</small><small>Tarif du séjour : {formatMoney(room.price, currency)}</small></span>{room.departureToday && <em>Départ aujourd’hui</em>}</li>)}</ul> : <p>Aucune chambre occupée.</p>}</section>
+        <section><strong className="is-departure">À libérer avant 12 h · {data.roomBoard.departures.length}</strong>{data.roomBoard.departures.length ? <ul>{data.roomBoard.departures.map((room) => <li key={room.id}><span><b>Ch. {room.number}</b><small>{room.occupant}</small><small>Tarif du séjour : {formatMoney(room.price, currency)}</small></span><em>Avant 12 h</em></li>)}</ul> : <p>Aucun départ prévu aujourd’hui.</p>}</section>
+      </div>
+    </article>
     <div className="reception-overview-grid">
       <article className="reception-panel"><div className="reception-panel-heading"><div><p>Statistiques globales de l’hôtel</p><h2>État des chambres</h2></div><BedDouble size={18} /></div><div className="reception-room-summary">{roomCards.map(([label, count, status]) => <div key={status}><span className={`reception-room-dot ${status}`} /><span>{label}</span><strong>{count}</strong></div>)}</div><button className="reception-link-button" onClick={() => navigate('planning')}>Ouvrir le planning chambres</button></article>
+      <article className="reception-panel"><div className="reception-panel-heading"><div><p>Liste des chambres</p><h2>Chambres disponibles à l’affichage</h2></div><BedDouble size={18} /></div>{rooms.length ? <div className="reception-room-list">{rooms.slice(0, 12).map((room) => <button key={room.id} type="button" onClick={() => navigate('planning')}><strong>Ch. {room.number}</strong><small>{room.category} · {roomAvailabilityLabel(room)}</small></button>)}</div> : <p className="reception-note">Aucune chambre configurée ou accessible.</p>}<button className="reception-link-button" onClick={() => navigate('planning')}>Voir toutes les chambres</button></article>
+      <article className="reception-panel"><div className="reception-panel-heading"><div><p>BAR-RESTAURANT · À ENCAISSER</p><h2>Consommations sur facture chambre</h2></div><Utensils size={18} /></div>{data.unpaidFolios.filter((folio) => Number(folio.restaurantAmount) > 0).length ? <div className="reception-queue-columns"><div>{data.unpaidFolios.filter((folio) => Number(folio.restaurantAmount) > 0).map((folio) => <button key={folio.id} type="button" onClick={() => { setFolioFilter('unpaid'); navigate('folios'); }}><span><strong>{folio.clientName} · ch. {folio.roomNumber ?? '—'}</strong><small>{folio.invoiceNumber ? `Facture ${folio.invoiceNumber}` : `Séjour ${folio.reference} · facture à produire`} · Bar {formatMoney(folio.restaurantAmount, currency)}</small></span><StatusBadge value="UNPAID" /><strong>{formatMoney(folio.balance, currency)}</strong></button>)}</div></div> : <p className="reception-note">Aucune consommation Bar-Restaurant impayée en ce moment.</p>}<button className="reception-link-button" onClick={() => { setFolioFilter('unpaid'); navigate('folios'); }}>Ouvrir les factures et folios à encaisser</button></article>
       <article className="reception-panel"><div className="reception-panel-heading"><div><p>Ma caisse</p><h2>{data.cashSession ? 'Session ouverte' : 'Aucune session ouverte'}</h2></div><Wallet size={18} /></div>{data.cashSession ? <><div className="reception-cash-summary"><span>Fonds initial</span><strong>{formatMoney(data.cashSession.openingAmount, currency)}</strong></div><div className="reception-cash-summary"><span>Solde espèces en caisse</span><strong>{formatMoney(data.cashSession.cashBalance, currency)}</strong></div><p className="reception-note">Les paiements nécessitent une session personnelle ouverte.</p></> : <p className="reception-note">Ouvrez votre session pour encaisser. Les mouvements resteront rattachés à votre compte.</p>}<button className="reception-button primary" onClick={() => navigate('cash')}>{data.cashSession ? 'Consulter ma caisse' : 'Ouvrir ma caisse'}</button></article>
       <article className="reception-panel"><div className="reception-panel-heading"><div><p>File d’arrivée</p><h2>Arrivées et départs du jour</h2></div><CalendarDays size={18} /></div><div className="reception-queue-columns"><div><strong>Arrivées</strong>{data.todayArrivals.length ? data.todayArrivals.map((item) => <button key={item.id} onClick={() => navigate('reservations')}><span>{item.client.name}<small>{item.reference} · {item.room ? `ch. ${item.room.number}` : 'chambre à attribuer'}</small></span><StatusBadge value={item.status} /></button>) : <small>Aucune arrivée prévue.</small>}</div><div><strong>Départs</strong>{data.todayDepartures.length ? data.todayDepartures.map((item) => <button key={item.id} onClick={() => navigate('reservations')}><span>{item.client.name}<small>{item.reference} · {item.room ? `ch. ${item.room.number}` : 'chambre à attribuer'}</small></span><StatusBadge value="CHECKED_IN" /></button>) : <small>Aucun départ prévu.</small>}</div></div></article>
     </div>
@@ -1362,6 +1497,18 @@ function OverviewSection({ data, currency, timezone, navigate, period, setPeriod
     </div>
     {data.paymentMethods.length === 0 && <div className="reception-alert is-info"><CreditCard size={16} />Aucun moyen de paiement n’est activé pour cet établissement. Les encaissements resteront indisponibles jusqu’à sa configuration.</div>}
   </>;
+}
+
+function RoomStatusSection({ board, currency }: { board: Overview['roomBoard'] | null; currency: string }) {
+  if (!board) return <div className="reception-panel reception-room-board"><p className="reception-note">Chargement de l’état des chambres…</p></div>;
+  return <article className="reception-panel reception-room-board">
+    <div className="reception-panel-heading"><div><p>ÉTAT DES CHAMBRES · SERVICE DU JOUR</p><h2>Chambres libres, occupées et à libérer</h2></div><BedDouble size={18} /></div>
+    <div className="reception-room-board-grid">
+      <section><strong className="is-vacant">Chambres vides · {board.vacant.length}</strong>{board.vacant.length ? <ul>{board.vacant.map((room) => <li key={room.id}><span><b>Ch. {room.number}</b><small>{room.state}{room.floor ? ` · Étage ${room.floor}` : ''}</small><small>Tarif : {room.priceMin === room.priceMax ? formatMoney(room.priceMin, currency) : `${formatMoney(room.priceMin, currency)} – ${formatMoney(room.priceMax, currency)}`}</small></span></li>)}</ul> : <p>Aucune chambre vide.</p>}</section>
+      <section><strong className="is-occupied">Occupées · {board.occupied.length}</strong>{board.occupied.length ? <ul>{board.occupied.map((room) => <li key={room.id}><span><b>Ch. {room.number}</b><small>{room.occupant}</small><small>Tarif du séjour : {formatMoney(room.price, currency)}</small></span>{room.departureToday && <em>Départ aujourd’hui</em>}</li>)}</ul> : <p>Aucune chambre occupée.</p>}</section>
+      <section><strong className="is-departure">À libérer avant 12 h · {board.departures.length}</strong>{board.departures.length ? <ul>{board.departures.map((room) => <li key={room.id}><span><b>Ch. {room.number}</b><small>{room.occupant}</small><small>Tarif du séjour : {formatMoney(room.price, currency)}</small></span><em>Avant 12 h</em></li>)}</ul> : <p>Aucun départ prévu aujourd’hui.</p>}</section>
+    </div>
+  </article>;
 }
 
 function receptionActionLabel(action: string) {
@@ -1377,15 +1524,21 @@ function receptionActionLabel(action: string) {
   return labels[action] ?? 'Opération réception';
 }
 
-function ReservationsSection({ data, clients, rooms, roomCatalog, availableRoomIds, availabilityError, form, setForm, permissions, search, setSearch, submitSearch, filters, setFilters, create, confirm, cancel, checkIn, checkOut, edit, assignRoom, extend, occupants, openFolio, history, move, goClients, currency, timezone, checkOutTime }: {
+function ReservationsSection({ data, clients, rooms, roomCatalog, availableRoomIds, availabilityError, form, setForm, newClientForm, setNewClientForm, newClientScan, setNewClientScan, createClient, canCreateClient, permissions, search, setSearch, submitSearch, filters, setFilters, create, confirm, cancel, checkIn, checkOut, edit, assignRoom, extend, occupants, openFolio, history, move, currency, timezone, checkOutTime }: {
   data: Reservation[];
   clients: Client[];
   rooms: Room[];
   roomCatalog: Room[];
   availableRoomIds: Set<string>;
   availabilityError: string | null;
-  form: { clientId: string; roomId: string; checkInDate: string; checkOutDate: string; checkInTime: string; stayType: 'SIESTA' | 'OVERNIGHT'; agreedRate: string; rateReason: string; includeBreakfast: boolean; adults: number; children: number };
-  setForm: (value: { clientId: string; roomId: string; checkInDate: string; checkOutDate: string; checkInTime: string; stayType: 'SIESTA' | 'OVERNIGHT'; agreedRate: string; rateReason: string; includeBreakfast: boolean; adults: number; children: number }) => void;
+  form: { clientId: string; roomId: string; checkInDate: string; checkOutDate: string; checkInTime: string; stayType: 'SIESTA' | 'OVERNIGHT'; agreedRate: string; rateReason: string; includeBreakfast: boolean; includeCommission: boolean; breakfastName: string; adults: number; children: number };
+  setForm: (value: { clientId: string; roomId: string; checkInDate: string; checkOutDate: string; checkInTime: string; stayType: 'SIESTA' | 'OVERNIGHT'; agreedRate: string; rateReason: string; includeBreakfast: boolean; includeCommission: boolean; breakfastName: string; adults: number; children: number }) => void;
+  newClientForm: { name: string; phone: string; email: string; nationality: string; address: string; idType: string; idNumber: string; notes: string };
+  setNewClientForm: (value: { name: string; phone: string; email: string; nationality: string; address: string; idType: string; idNumber: string; notes: string }) => void;
+  newClientScan: File | null;
+  setNewClientScan: (file: File | null) => void;
+  createClient: () => void;
+  canCreateClient: boolean;
   permissions: string[];
   search: string;
   setSearch: (value: string) => void;
@@ -1404,12 +1557,12 @@ function ReservationsSection({ data, clients, rooms, roomCatalog, availableRoomI
   openFolio: (reservation: Reservation) => void;
   history: (reservation: Reservation) => void;
   move: (reservation: Reservation) => void;
-  goClients: () => void;
   currency: string;
   timezone: string;
   checkOutTime: string | null;
 }) {
   const [rateReasonDialogOpen, setRateReasonDialogOpen] = useState(false);
+  const [showInlineClientForm, setShowInlineClientForm] = useState(false);
   const reservationFormRef = useRef<HTMLFormElement>(null);
   const selectedRoom = roomCatalog.find((room) => room.id === form.roomId);
   const availabilityReady = Boolean(form.checkInDate && (form.stayType === 'SIESTA'
@@ -1426,7 +1579,9 @@ function ReservationsSection({ data, clients, rooms, roomCatalog, availableRoomI
       ? Number(form.agreedRate || 0)
       : Number(form.agreedRate || 0) * nightsBetween(form.checkInDate, form.checkOutDate)
     : 0;
-  const breakfastPrice = selectedRoom && form.stayType === 'OVERNIGHT' ? 5000 : 0;
+  const roomRate = Number(form.agreedRate || 0);
+  const breakfastPrice = Number(selectedRoom?.breakfastPriceInput ?? 5000);
+  const commission = roomRate <= 20000 ? 0 : roomRate <= 25000 ? 2500 : 5000;
   const estimatedTotal = estimatedAccommodation + (form.includeBreakfast ? breakfastPrice : 0);
   const can = (permission: string) => permissions.includes(permission);
   function submitReservation(event: FormEvent<HTMLFormElement>) {
@@ -1450,16 +1605,32 @@ function ReservationsSection({ data, clients, rooms, roomCatalog, availableRoomI
   return <>
     {permissions.includes('reservations.create') && (
     <form ref={reservationFormRef} className="reception-form-grid" onSubmit={submitReservation}>
-      <div className="reception-form-title"><div><p>Nouvelle réservation</p><h2>Créer un séjour</h2></div><button type="button" className="reception-link-button" onClick={goClients}>Créer un client</button></div>
-      <label><span>Client</span><select value={form.clientId} onChange={(event) => setForm({ ...form, clientId: event.target.value })} required><option value="">Choisir un client</option>{clients.map((client) => <option value={client.id} key={client.id}>{client.name}{client.phone ? ` · ${client.phone}` : ''}</option>)}</select>{clients.length === 0 && <small>Aucun client enregistré. Créez d’abord sa fiche.</small>}</label>
-      <label><span>Type de séjour</span><select value={form.stayType} onChange={(event) => setForm({ ...form, stayType: event.target.value as 'SIESTA' | 'OVERNIGHT', checkInTime: event.target.value === 'SIESTA' ? '' : form.checkInTime, roomId: '', agreedRate: '', rateReason: '', includeBreakfast: false })}><option value="OVERNIGHT">Nuitée(s)</option><option value="SIESTA">Sieste · durée fixe 3 h 30</option></select></label>
+      <div className="reception-form-title"><div><p>Nouvelle réservation</p><h2>Créer un séjour</h2></div></div>
+      <label><span>Client</span><select value={form.clientId} onChange={(event) => setForm({ ...form, clientId: event.target.value })} required><option value="">Choisir un client</option>{clients.map((client) => <option value={client.id} key={client.id}>{client.name}{client.phone ? ` · ${client.phone}` : ''}</option>)}</select>{clients.length === 0 && <small>Aucun client enregistré. Créez sa fiche ci-dessous.</small>}</label>
+      {canCreateClient && <div className="reception-inline-client">
+        <button type="button" className="reception-link-button" aria-expanded={showInlineClientForm} onClick={() => setShowInlineClientForm((shown) => !shown)}>{showInlineClientForm ? 'Masquer la création du client' : 'Créer un client dans ce formulaire'}</button>
+        {showInlineClientForm && <div className="reception-inline-client-fields">
+          <div className="reception-form-title"><div><p>Nouvelle fiche</p><h3>Créer et sélectionner un client</h3></div></div>
+          <label><span>Nom complet</span><input value={newClientForm.name} onChange={(event) => setNewClientForm({ ...newClientForm, name: event.target.value })} minLength={2} maxLength={160} autoComplete="name" /></label>
+          <label><span>Téléphone</span><input value={newClientForm.phone} onChange={(event) => setNewClientForm({ ...newClientForm, phone: event.target.value })} maxLength={40} autoComplete="tel" /></label>
+          <label><span>E-mail</span><input type="email" value={newClientForm.email} onChange={(event) => setNewClientForm({ ...newClientForm, email: event.target.value })} maxLength={191} autoComplete="email" /></label>
+          <label><span>Nationalité</span><input value={newClientForm.nationality} onChange={(event) => setNewClientForm({ ...newClientForm, nationality: event.target.value })} maxLength={80} /></label>
+          <label><span>Adresse</span><input value={newClientForm.address} onChange={(event) => setNewClientForm({ ...newClientForm, address: event.target.value })} maxLength={255} /></label>
+          <label><span>Type de pièce d’identité</span><select value={newClientForm.idType} onChange={(event) => setNewClientForm({ ...newClientForm, idType: event.target.value })}>{['', 'Carte nationale d’identité', 'Passeport', 'Carte de séjour', 'Autre'].map((type) => <option value={type} key={type || 'none'}>{type || 'Non renseignée'}</option>)}</select></label>
+          <label><span>Numéro de pièce d’identité</span><input value={newClientForm.idNumber} onChange={(event) => setNewClientForm({ ...newClientForm, idNumber: event.target.value })} maxLength={80} /></label>
+          <label className="is-wide"><span>Scan de la pièce d’identité</span><input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={(event) => setNewClientScan(event.target.files?.[0] ?? null)} /><small>{newClientScan ? `Fichier sélectionné : ${newClientScan.name}` : 'JPEG, PNG, WebP ou PDF · 5 Mo max.'}</small></label>
+          <label className="is-wide"><span>Informations complémentaires</span><textarea value={newClientForm.notes} onChange={(event) => setNewClientForm({ ...newClientForm, notes: event.target.value })} maxLength={500} rows={2} /></label>
+          <button type="button" className="reception-button primary" onClick={createClient}><Plus size={15} />Enregistrer et sélectionner le client</button>
+        </div>}
+      </div>}
+      <label><span>Type de séjour</span><select value={form.stayType} onChange={(event) => setForm({ ...form, stayType: event.target.value as 'SIESTA' | 'OVERNIGHT', checkInTime: event.target.value === 'SIESTA' ? '' : form.checkInTime, roomId: '', agreedRate: '', rateReason: '', includeBreakfast: false, includeCommission: false })}><option value="OVERNIGHT">Nuitée(s)</option><option value="SIESTA">Sieste · durée fixe 3 h 30</option></select></label>
       <label><span>Date d’arrivée</span><input type="date" value={form.checkInDate} onChange={(event) => setForm({ ...form, checkInDate: event.target.value, roomId: '' })} required /></label>
       {form.stayType === 'OVERNIGHT'
         ? <label><span>Date de départ</span><input type="date" value={form.checkOutDate} onChange={(event) => setForm({ ...form, checkOutDate: event.target.value, roomId: '' })} required /><small>Arrivée à l’heure souhaitée ; départ à {checkOutTime ?? '12:00'} ({timezone}).</small></label>
         : <label><span>Heure prévue d’arrivée ({timezone})</span><input type="time" value={form.checkInTime} onChange={(event) => setForm({ ...form, checkInTime: event.target.value, roomId: '' })} required /><small>La durée réelle de 3 h 30 commencera au check-in, selon l’heure du serveur.</small></label>}
       <label><span>Chambre</span><select value={form.roomId} onChange={(event) => {
         const room = rooms.find((item) => item.id === event.target.value);
-        setForm({ ...form, roomId: event.target.value, agreedRate: room && form.stayType === 'OVERNIGHT' ? room.nightlyRateMin : '', rateReason: '', includeBreakfast: false });
+        setForm({ ...form, roomId: event.target.value, agreedRate: room && form.stayType === 'OVERNIGHT' ? room.nightlyRateMin : '', rateReason: '', includeBreakfast: false, includeCommission: false });
       }}><option value="">Attribuer plus tard</option>{roomCatalog.map((room) => {
         const available = availableRoomIds.has(room.id);
         const unavailableLabel = !availabilityReady ? ' · sélectionnez les dates et heures' : ' · Indisponible';
@@ -1467,17 +1638,17 @@ function ReservationsSection({ data, clients, rooms, roomCatalog, availableRoomI
           {room.number} · {room.category} · {form.stayType === 'SIESTA' ? 'prix convenu' : roomNightlyRateLabel(room, currency)}{available ? '' : unavailableLabel}
         </option>;
       })}</select><small>{selectedRoom ? 'Tarif exigé dès maintenant.' : 'Sans chambre : le tarif sera saisi lors de l’attribution. Les chambres indisponibles sont désactivées.'}</small>{availabilityReady && availableRoomIds.size === 0 && <small>Aucune chambre n’est disponible sur cette période.</small>}</label>
-      {selectedRoom && <div className="reception-field"><span>{form.stayType === 'SIESTA' ? 'Prix convenu avec le client' : 'Tarif chambre par nuit'}</span><input type="number" min="0.01" step="0.01" value={form.agreedRate} onChange={(event) => setForm({ ...form, agreedRate: event.target.value })} required />{form.stayType === 'OVERNIGHT' && <><small>{selectedRoom.nightlyRateMin === selectedRoom.nightlyRateMax ? `Tarif chambre : ${formatMoney(selectedRoom.nightlyRateMin, currency)} par nuit.` : `Fourchette chambre : ${formatMoney(selectedRoom.nightlyRateMin, currency)} – ${formatMoney(selectedRoom.nightlyRateMax, currency)} par nuit.`}</small><span className="reception-checkbox"><input id="include-breakfast" type="checkbox" checked={form.includeBreakfast} onChange={(event) => setForm({ ...form, includeBreakfast: event.target.checked })} /><label htmlFor="include-breakfast">Ajouter le petit déjeuner (+{formatMoney(5000, currency)})</label></span>{selectedRoom.optionalMeal?.code === 'LUNCH' && <small>{selectedRoom.optionalMeal.name} facultatif : {formatMoney(selectedRoom.optionalMeal.price, currency)}, commandé séparément au restaurant.</small>}</>}{form.stayType === 'SIESTA' && <small>Le montant est défini avec le client, sans tarif fixe.</small>}</div>}
+      {selectedRoom && <div className="reception-field"><span>{form.stayType === 'SIESTA' ? `Prix convenu avec le client (${currency})` : `Tarif chambre par nuit (${currency})`}</span><input type="number" min="0.01" step="0.01" value={form.agreedRate} onChange={(event) => setForm({ ...form, agreedRate: event.target.value })} required />{form.stayType === 'OVERNIGHT' && <><small>{selectedRoom.nightlyRateMin === selectedRoom.nightlyRateMax ? `Tarif chambre : ${formatInputMoney(selectedRoom.nightlyRateMin, currency)} par nuit.` : `Fourchette chambre : ${formatInputMoney(selectedRoom.nightlyRateMin, currency)} – ${formatInputMoney(selectedRoom.nightlyRateMax, currency)} par nuit.`}</small>{selectedRoom.breakfastPriceInput != null ? <><span className="reception-checkbox"><input id="include-breakfast" type="checkbox" checked={form.includeBreakfast} onChange={(event) => setForm({ ...form, includeBreakfast: event.target.checked })} /><label htmlFor="include-breakfast">Associer le petit-déjeuner à la chambre (+{formatInputMoney(breakfastPrice, currency)})</label></span>{form.includeBreakfast && <label>Nom du petit-déjeuner<input value={form.breakfastName} onChange={(event) => setForm({ ...form, breakfastName: event.target.value })} required maxLength={160} /></label>}</> : <small>Le petit-déjeuner doit être configuré dans la carte du restaurant.</small>}<span className="reception-checkbox"><input id="include-commission" type="checkbox" checked={form.includeCommission} onChange={(event) => setForm({ ...form, includeCommission: event.target.checked })} /><label htmlFor="include-commission">Retirer une commission unique de la caisse ({formatInputMoney(commission, currency)})</label></span><small>Retrait unique par réservation, quel que soit le nombre de nuitées. Non ajouté à la facture du client.</small></>}{form.stayType === 'SIESTA' && <small>Le montant est défini avec le client, sans tarif fixe.</small>}</div>}
       <label><span>Adultes</span><input type="number" min={1} value={form.adults} onChange={(event) => setForm({ ...form, adults: Number(event.target.value) })} required /></label>
       <label><span>Enfants</span><input type="number" min={0} value={form.children} onChange={(event) => setForm({ ...form, children: Number(event.target.value) })} required /></label>
-      <div className="reception-estimate"><span>{selectedRoom ? `Total estimé ${form.stayType === 'SIESTA' ? '· prix convenu' : `· ${nightsBetween(form.checkInDate, form.checkOutDate)} nuit(s)${form.includeBreakfast ? ' · petit déjeuner inclus' : ''}`}` : 'Hébergement · à définir à l’attribution'}</span><strong>{selectedRoom ? formatMoney(estimatedTotal, currency) : '—'}</strong></div>
+      <div className="reception-estimate"><span>{selectedRoom ? `Total estimé (${currency}) ${form.stayType === 'SIESTA' ? '· prix convenu' : `· ${nightsBetween(form.checkInDate, form.checkOutDate)} nuit(s)${form.includeBreakfast ? ' · petit déjeuner inclus' : ''}`}` : 'Hébergement · à définir à l’attribution'}</span><strong>{selectedRoom ? formatInputMoney(estimatedTotal, currency) : '—'}</strong></div>
       <button className="reception-button primary" disabled={!clients.length || (Boolean(selectedRoom) && Number(form.agreedRate) <= 0) || (form.stayType === 'OVERNIGHT' && !checkOutTime)}>Créer la réservation</button>
     </form>
     )}
     {rateReasonDialogOpen && selectedRoom && <div className="reception-modal-backdrop reception-rate-reason-backdrop" role="presentation"><form className="reception-modal reception-rate-reason-modal" role="dialog" aria-modal="true" aria-labelledby="reception-rate-reason-title" onSubmit={confirmSpecialRate}>
       <div className="reception-modal-head"><div className="reception-rate-reason-title"><span className="reception-rate-reason-icon"><ShieldAlert size={20} /></span><div><p>Tarif spécial · chambre {selectedRoom.number}</p><h2 id="reception-rate-reason-title">Justification requise</h2></div></div><button type="button" className="reception-icon-button" onClick={cancelSpecialRate} aria-label="Fermer"><X size={18} /></button></div>
-      <div className="reception-rate-reason-summary"><div><span>Tarif saisi</span><strong>{formatMoney(form.agreedRate, currency)}</strong></div><div><span>Tarif autorisé</span><strong>{roomNightlyRateLabel(selectedRoom, currency)}</strong></div></div>
-      <p className="reception-rate-reason-copy">Ce montant sort de la fourchette chambre autorisée. Indiquez le motif de cette dérogation pour poursuivre la création de la réservation.{selectedRoom.optionalMeal && ` Le ${selectedRoom.optionalMeal.name.toLowerCase()} facultatif (${formatMoney(selectedRoom.optionalMeal.price, currency)}) se commande séparément au restaurant.`}</p>
+      <div className="reception-rate-reason-summary"><div><span>Tarif saisi</span><strong>{formatInputMoney(form.agreedRate, currency)}</strong></div><div><span>Tarif autorisé</span><strong>{roomNightlyRateLabel(selectedRoom, currency)}</strong></div></div>
+      <p className="reception-rate-reason-copy">Ce montant sort de la fourchette chambre autorisée. Indiquez le motif de cette dérogation pour poursuivre la création de la réservation.{selectedRoom.optionalMeal && ` Le ${selectedRoom.optionalMeal.name.toLowerCase()} facultatif (${formatInputMoney(selectedRoom.optionalMeal.price, currency)}) se commande séparément au restaurant.`}</p>
       <label className="reception-rate-reason-field"><span>Motif de la dérogation</span><input type="text" maxLength={500} value={form.rateReason} onChange={(event) => setForm({ ...form, rateReason: event.target.value })} required autoFocus placeholder="Ex. accord exceptionnel avec le client" /></label>
       <div className="reception-modal-actions"><button type="button" className="reception-button" onClick={cancelSpecialRate}>Annuler</button><button type="submit" className="reception-button primary" disabled={!form.rateReason.trim()}>Justifier et créer</button></div>
     </form></div>}
@@ -1549,7 +1720,7 @@ function ClientsSection({ data, form, setForm, idScan, setIdScan, search, setSea
   </>;
 }
 
-function FolioSection({ data, payerName, setPayerName, currency, timezone, methods, cashOpen, service, setService, addService, issueInvoice, printInvoice, payment, setPayment, collect, openReservations }: {
+function FolioSection({ data, payerName, setPayerName, currency, timezone, methods, cashOpen, service, setService, addService, issueInvoice, printInvoice, payment, setPayment, collect, openReservations, openCash }: {
   data: Folio | null;
   payerName: string;
   setPayerName: (value: string) => void;
@@ -1566,8 +1737,10 @@ function FolioSection({ data, payerName, setPayerName, currency, timezone, metho
   setPayment: (value: { paymentMethodId: string; amount: string; reference: string }) => void;
   collect: (event: FormEvent<HTMLFormElement>) => void;
   openReservations: () => void;
+  openCash: () => void;
 }) {
   if (!data) return <div className="reception-panel"><EmptyState text="Sélectionnez une réservation pour ouvrir son folio." /><button className="reception-button primary" onClick={openReservations}>Voir les réservations</button></div>;
+  const folioCurrency = data.invoice?.currency ?? currency;
   const billedAmount = Number(data.billed);
   const paidAmount = Number(data.paid);
   const balanceAmount = Number(data.balance);
@@ -1578,25 +1751,25 @@ function FolioSection({ data, payerName, setPayerName, currency, timezone, metho
     : paymentStage === 'paid'
       ? 'Aucun solde restant'
       : paymentStage === 'partial'
-        ? `${formatMoney(data.balance, currency)} restent à payer`
+        ? `${formatMoney(data.balance, folioCurrency)} restent à payer`
         : data.invoice
-          ? `${formatMoney(data.balance, currency)} restent à payer`
-          : `Impayé · facture à produire · ${formatMoney(data.balance, currency)} dus`;
+          ? `${formatMoney(data.balance, folioCurrency)} restent à payer`
+          : `Impayé · facture à produire · ${formatMoney(data.balance, folioCurrency)} dus`;
   return <>
     <div className="reception-folio-heading"><div><p>Folio · {data.reservation.reference}</p><h2>{data.reservation.client.name} · {data.reservation.room ? `chambre ${data.reservation.room}` : 'chambre à attribuer'}</h2><span>{data.reservation.stayType === 'SIESTA' ? 'Sieste · durée fixe 3 h 30' : `${nightsBetween(data.reservation.checkInDate, data.reservation.checkOutDate)} nuitée(s)`} · {formatDate(data.reservation.checkInDate)} – {formatDate(data.reservation.checkOutDate)}</span></div><StatusBadge value={data.status} /></div>
-    <div className="reception-folio-totals"><div><span>Facturé</span><strong>{formatMoney(data.billed, currency)}</strong></div><div><span>Encaissé</span><strong>{formatMoney(data.paid, currency)}</strong></div><div className="is-due"><span>Reste dû</span><strong>{formatMoney(data.balance, currency)}</strong></div></div>
+    <div className="reception-folio-totals"><div><span>Facturé</span><strong>{formatMoney(data.billed, folioCurrency)}</strong></div><div><span>Encaissé</span><strong>{formatMoney(data.paid, folioCurrency)}</strong></div><div className="is-due"><span>Reste dû</span><strong>{formatMoney(data.balance, folioCurrency)}</strong></div></div>
     <section className="reception-folio-progress" aria-label="Cheminement de facturation et de paiement">
-      <article className={billedAmount > 0 ? 'is-complete' : 'is-waiting'}><span>ÉTAPE 1</span><strong>Dépenses enregistrées</strong><small>{billedAmount > 0 ? `${formatMoney(data.billed, currency)} au folio` : 'En attente de dépenses'}</small></article>
+      <article className={billedAmount > 0 ? 'is-complete' : 'is-waiting'}><span>ÉTAPE 1</span><strong>Dépenses enregistrées</strong><small>{billedAmount > 0 ? `${formatMoney(data.billed, folioCurrency)} au folio` : 'En attente de dépenses'}</small></article>
       <article className={data.invoice ? 'is-complete' : billedAmount > 0 ? 'is-current' : 'is-waiting'}><span>ÉTAPE 2</span><strong>Production de la facture</strong><small>{data.invoice ? `${data.invoice.number} · émise` : billedAmount > 0 ? 'À produire depuis le folio' : 'En attente de dépenses'}</small></article>
       <article className={`is-${paymentStage}`}><span>ÉTAPE 3</span><strong>{paymentStageLabel}</strong><small>{paymentStageDetail}</small></article>
     </section>
     <div className="reception-overview-grid">
-      <section className="reception-panel"><div className="reception-panel-heading"><div><p>Pièces du séjour</p><h2>Lignes du folio</h2></div><FileText size={18} /></div>{data.lines.length ? <div className="reception-folio-lines">{data.lines.map((line) => <div key={line.id}><span>{line.description}<small>{line.type === 'ACCOMMODATION' ? 'Hébergement' : 'Prestation'}</small></span><strong>{formatMoney(line.amount, currency)}</strong></div>)}</div> : <EmptyState text="Aucune ligne sur ce folio." />}{data.invoice ? <div className="reception-invoice-chip"><FileText size={15} />Facture {data.invoice.number} · {formatMoney(data.invoice.totalAmount, currency)}<small>Payeur : {data.invoice.payerName ?? data.reservation.client.name}</small><small>Émise le {formatDateTime(data.invoice.issuedAt, timezone)}</small><small>Moyen(s) de paiement : {paymentMethodNames(data.payments).join(', ') || 'Aucun règlement enregistré'}</small><button className="reception-button" onClick={printInvoice}>Imprimer sur rouleau 80 mm</button></div> : <div className="reception-operation-form"><label><span>Nom du payeur sur la facture</span><input value={payerName} onChange={(event) => setPayerName(event.target.value)} minLength={2} maxLength={160} required /></label><button className="reception-button" disabled={data.status !== 'OPEN'} onClick={issueInvoice}>Créer la facture</button></div>}</section>
-      <section className="reception-panel"><div className="reception-panel-heading"><div><p>Encaissements</p><h2>Historique des paiements</h2></div><CreditCard size={18} /></div>{data.payments.length ? <div className="reception-folio-lines">{data.payments.map((item) => <div key={item.id}><span>{item.method}<small>{formatDateTime(item.createdAt, timezone)}{item.reference ? ` · ${item.reference}` : ''}</small></span><strong>{formatMoney(item.amount, currency)}</strong></div>)}</div> : <EmptyState text="Aucun paiement enregistré." />}</section>
+      <section className="reception-panel"><div className="reception-panel-heading"><div><p>Pièces du séjour</p><h2>Lignes du folio</h2></div><FileText size={18} /></div>{data.lines.length ? <div className="reception-folio-lines">{data.lines.map((line) => <div key={line.id}><span>{line.description}<small>{line.type === 'ACCOMMODATION' ? 'Hébergement' : 'Prestation'}</small></span><strong>{formatMoney(line.amount, folioCurrency)}</strong></div>)}</div> : <EmptyState text="Aucune ligne sur ce folio." />}{data.invoice ? <div className="reception-invoice-chip"><FileText size={15} />Facture {data.invoice.number} · {formatMoney(data.invoice.totalAmount, data.invoice.currency)}<small>Payeur : {data.invoice.payerName ?? data.reservation.client.name}</small><small>Émise le {formatDateTime(data.invoice.issuedAt, timezone)}</small><small>Moyen(s) de paiement : {paymentMethodNames(data.payments).join(', ') || 'Aucun règlement enregistré'}</small><button className="reception-button" onClick={printInvoice}>Imprimer la facture</button></div> : <div className="reception-operation-form"><label><span>Nom du payeur sur la facture</span><input value={payerName} onChange={(event) => setPayerName(event.target.value)} minLength={2} maxLength={160} required /></label><button className="reception-button" disabled={data.status !== 'OPEN'} onClick={issueInvoice}>Créer la facture</button></div>}</section>
+      <section className="reception-panel"><div className="reception-panel-heading"><div><p>Encaissements</p><h2>Historique des paiements</h2></div><CreditCard size={18} /></div>{data.payments.length ? <div className="reception-folio-lines">{data.payments.map((item) => <div key={item.id}><span>{item.method}<small>{formatDateTime(item.createdAt, timezone)}{item.reference ? ` · ${item.reference}` : ''}</small></span><strong>{formatMoney(item.amount, folioCurrency)}</strong></div>)}</div> : <EmptyState text="Aucun paiement enregistré." />}</section>
     </div>
     <div className="reception-overview-grid">
       {data.status === 'OPEN' && !data.invoice && <form className="reception-panel reception-operation-form" onSubmit={addService}><div className="reception-panel-heading"><div><p>Prestation autorisée</p><h2>Ajouter au folio</h2></div><Plus size={18} /></div><label><span>Libellé</span><input value={service.description} onChange={(event) => setService({ ...service, description: event.target.value })} minLength={2} maxLength={200} required /></label><label><span>Montant ({currency})</span><input type="number" value={service.amount} onChange={(event) => setService({ ...service, amount: event.target.value })} min="0.01" step="0.01" max="99999999.99" required /></label><button className="reception-button primary">Ajouter la prestation</button></form>}
-      {data.status === 'OPEN' && data.balance !== '0.00' && <form className="reception-panel reception-operation-form" onSubmit={collect}><div className="reception-panel-heading"><div><p>Session de caisse</p><h2>Encaisser un paiement</h2></div><Wallet size={18} /></div>{!cashOpen && <p className="reception-note">Ouvrez d’abord votre caisse personnelle.</p>}{methods.length === 0 && <p className="reception-note">Aucun moyen de paiement actif pour cet établissement.</p>}<label><span>Montant à encaisser · solde {formatMoney(data.balance, currency)}</span><input type="number" value={payment.amount} onChange={(event) => setPayment({ ...payment, amount: event.target.value })} min="0.01" step="0.01" max={data.balance} required /></label><label><span>Moyen de paiement</span><select value={payment.paymentMethodId} onChange={(event) => setPayment({ ...payment, paymentMethodId: event.target.value })} required><option value="">Choisir…</option>{methods.map((method) => <option value={method.id} key={method.id}>{method.name}</option>)}</select></label><label><span>Référence de transaction (facultative)</span><input value={payment.reference} onChange={(event) => setPayment({ ...payment, reference: event.target.value })} maxLength={100} /></label><button className="reception-button primary" disabled={!cashOpen || !methods.length}>Confirmer l’encaissement</button></form>}
+      {(data.status === 'OPEN' || data.invoice) && data.balance !== '0.00' && <form className="reception-panel reception-operation-form" onSubmit={collect}><div className="reception-panel-heading"><div><p>Session de caisse</p><h2>Encaisser le solde de la facture</h2></div><Wallet size={18} /></div>{!cashOpen && <p className="reception-note">Ouvrez la caisse pour encaisser. <button type="button" className="reception-link-button" onClick={openCash}>Accéder à la caisse</button></p>}{methods.length === 0 && <p className="reception-note">Aucun moyen de paiement actif pour cet établissement.</p>}      <label><span>Montant à encaisser ({currency}) · solde {formatMoney(data.balance, currency)}</span><input type="number" value={payment.amount} onChange={(event) => setPayment({ ...payment, amount: event.target.value })} min="0.01" step="0.01" required /></label><label><span>Moyen de paiement</span><select value={payment.paymentMethodId} onChange={(event) => setPayment({ ...payment, paymentMethodId: event.target.value })} required><option value="">Choisir…</option>{methods.map((method) => <option value={method.id} key={method.id}>{method.name}</option>)}</select></label><label><span>Référence de transaction (facultative)</span><input value={payment.reference} onChange={(event) => setPayment({ ...payment, reference: event.target.value })} maxLength={100} /></label><button className="reception-button primary" disabled={!methods.length}>Confirmer l’encaissement</button></form>}
     </div>
   </>;
 }
@@ -1680,7 +1853,7 @@ function ReservationEditDialog({ data, form, setForm, clients, rooms, currency, 
         const room = rooms.find((item) => item.id === event.target.value);
         setForm({ ...form, roomId: event.target.value, agreedRate: room && reservation.stayType === 'OVERNIGHT' ? room.nightlyRateMin : '', rateReason: '' });
       }} required><option value="">Choisir une chambre</option>{rooms.map((room) => <option value={room.id} key={room.id}>{room.number} · {room.category}{reservation.stayType === 'OVERNIGHT' ? ` · ${roomNightlyRateLabel(room, currency)}` : ''}</option>)}</select></label>
-      <label><span>{reservation.stayType === 'SIESTA' ? 'Prix convenu' : 'Tarif chambre par nuit'}</span><input type="number" min="0.01" step="0.01" value={form.agreedRate} onChange={(event) => setForm({ ...form, agreedRate: event.target.value })} required /><small>{reservation.stayType === 'SIESTA' ? 'Montant total de la sieste.' : selectedRoom ? `Tarif chambre : ${roomNightlyRateLabel(selectedRoom, currency)}${selectedRoom.optionalMeal ? `. ${selectedRoom.optionalMeal.name} en option : ${formatMoney(selectedRoom.optionalMeal.price, currency)}.` : ''}` : 'Le tarif sera appliqué au folio.'}</small></label>
+      <label><span>{reservation.stayType === 'SIESTA' ? `Prix convenu (${currency})` : `Tarif chambre par nuit (${currency})`}</span><input type="number" min="0.01" step="0.01" value={form.agreedRate} onChange={(event) => setForm({ ...form, agreedRate: event.target.value })} required /><small>{reservation.stayType === 'SIESTA' ? 'Montant total de la sieste.' : selectedRoom ? `Tarif chambre : ${roomNightlyRateLabel(selectedRoom, currency)}${selectedRoom.optionalMeal ? `. ${selectedRoom.optionalMeal.name} en option : ${formatInputMoney(selectedRoom.optionalMeal.price, currency)}.` : ''}` : 'Le tarif sera appliqué au folio.'}</small></label>
     </>}
     {(mode === 'update' || mode === 'assign-room') && reservation.stayType === 'OVERNIGHT' && <label><span>Justification du tarif spécial</span><input type="text" maxLength={500} value={form.rateReason} onChange={(event) => setForm({ ...form, rateReason: event.target.value })} required={outsideRateRange} placeholder="À renseigner si le tarif sort de la fourchette" /></label>}
     {mode !== 'extend' && <div className="reception-edit-dates"><label><span>Adultes</span><input type="number" min={1} value={form.adults} onChange={(event) => setForm({ ...form, adults: Number(event.target.value) })} required /></label><label><span>Enfants</span><input type="number" min={0} value={form.children} onChange={(event) => setForm({ ...form, children: Number(event.target.value) })} required /></label></div>}
@@ -1736,13 +1909,8 @@ function CashSection({
 }) {
   const currentSession = sessions.find((session) => session.status === 'OPEN') ?? null;
   const cashMethod = paymentMethods.find((method) => method.code === 'CASH');
-  const cashExpenses = expenses
-    .filter((expense) => paymentMethods.find((method) => method.id === expense.paymentMethodId)?.code === 'CASH')
-    .reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
   const cashReceived = currentSession?.paymentsByMethod.find((method) => method.code === 'CASH')?.amount ?? '0.00';
-  const expectedCashAfterExpenses = currentSession
-    ? Number(currentSession.openingAmount) + Number(cashReceived) - cashExpenses
-    : 0;
+  const currentExpectedCash = currentSession ? Number(currentSession.expectedCash) : 0;
   function addExpense() {
     if (!paymentMethods.length) return;
     setExpenses([...expenses, {
@@ -1756,7 +1924,7 @@ function CashSection({
     setExpenses(expenses.map((expense) => expense.id === id ? { ...expense, ...patch } : expense));
   }
 
-  return <>
+  return <div className="reception-cash-page">
     {!current ? <form className="reception-cash-open reception-panel" onSubmit={open}><div><p>Session personnelle</p><h2>Ouvrir ma caisse</h2><small>Une seule session ouverte par réceptionniste et établissement.</small></div><label><span>Fonds initial ({currency})</span><input type="number" min="0" step="0.01" value={openingAmount} onChange={(event) => setOpeningAmount(event.target.value)} required /></label><button className="reception-button primary">Ouvrir la session</button></form> : <section className="reception-panel reception-cash-current">
       <div className="reception-panel-heading"><div><p>Session ouverte depuis {formatDateTime(current.openedAt, timezone)}</p><h2>Votre caisse</h2></div><StatusBadge value="OPEN" /></div>
       <div className="reception-folio-totals"><div><span>Fonds initial</span><strong>{formatMoney(current.openingAmount, currency)}</strong></div><div><span>Espèces disponibles</span><strong>{formatMoney(currentSession ? Number(currentSession.openingAmount) + Number(cashReceived) : Number(current.openingAmount), currency)}</strong></div><div><span>Total des règlements</span><strong>{formatMoney(currentSession?.paymentsByMethod.reduce((sum, method) => sum + Number(method.amount), 0) ?? 0, currency)}</strong></div></div>
@@ -1777,7 +1945,7 @@ function CashSection({
         <div className="reception-shift-close-fields">
           <label><span>Service</span><select value={shiftType} onChange={(event) => setShiftType(event.target.value === 'NIGHT' ? 'NIGHT' : 'DAY')} required><option value="DAY">Jour · 08 h–18 h</option><option value="NIGHT">Nuit · 18 h–08 h</option></select></label>
           <label><span>Espèces comptées ({currency})</span><input type="number" min="0" step="0.01" value={countedAmount} onChange={(event) => setCountedAmount(event.target.value)} required /></label>
-          <div className="reception-shift-cash-preview"><span>Théorique après dépenses saisies</span><strong>{formatMoney(expectedCashAfterExpenses, currency)}</strong></div>
+          <div className="reception-shift-cash-preview"><span>Théorique actuel (XAF)</span><strong>{formatMoney(currentExpectedCash, currency)}</strong>{currency !== 'XAF' && <small>Les dépenses saisies seront converties automatiquement en XAF à la clôture.</small>}</div>
         </div>
         <div className="reception-shift-expenses">
           <div className="reception-shift-subheading"><div><strong>Dépenses du service</strong><small>Chaque ligne sera intégrée au rapport comptable.</small></div><button type="button" className="reception-button" onClick={addExpense} disabled={!paymentMethods.length}><Plus size={14} /> Ajouter une dépense</button></div>
@@ -1795,9 +1963,9 @@ function CashSection({
       </form>
     </section>}
     <div className="reception-panel reception-table-panel"><div className="reception-panel-heading"><div><p>Session ouverte</p><h2>Transactions de ma caisse</h2></div><CreditCard size={18} /></div>{currentSession && currentSession.transactions.length ? <div className="reception-table-wrap"><table className="reception-table"><thead><tr><th>Date</th><th>Réservation</th><th>Client</th><th>Moyen</th><th>Libellé / réf.</th><th>Montant</th></tr></thead><tbody>{currentSession.transactions.map((payment) => <tr key={payment.id}><td>{formatDateTime(payment.createdAt, timezone)}</td><td>{payment.reservationReference ?? 'Paiement direct'}</td><td>{payment.clientName ?? '—'}</td><td>{payment.method}</td><td>{payment.description || payment.reference || '—'}</td><td><strong>{formatMoney(payment.amount, currency)}</strong></td></tr>)}</tbody></table></div> : <EmptyState text={currentSession ? 'Aucune transaction sur cette session.' : 'Aucune session ouverte.'} />}<p className="reception-note">Aucune transaction validée ne peut être modifiée ni supprimée ; les corrections passent par une opération autorisée et journalisée.</p></div>
-    <div className="reception-panel reception-table-panel"><div className="reception-panel-heading"><div><p>Historique personnel</p><h2>Rapports de service</h2></div></div>{reports.length ? <div className="reception-table-wrap"><table className="reception-table"><thead><tr><th>Service</th><th>Période</th><th>Réceptionniste</th><th>Écart de caisse</th><th></th></tr></thead><tbody>{reports.map((report) => <tr key={report.id}><td>{report.shiftType === 'DAY' ? 'Jour' : 'Nuit'}</td><td>{formatDateTime(report.startedAt, timezone)} – {formatDateTime(report.endedAt, timezone)}</td><td>{report.user.name}</td><td>{formatMoney(report.summary.cash.variance, currency)}</td><td><button className="reception-button" type="button" onClick={() => viewReport(report)}>Voir / PDF</button></td></tr>)}</tbody></table></div> : <EmptyState text="Aucun rapport de service enregistré." />}</div>
+    <div className="reception-panel reception-table-panel"><div className="reception-panel-heading"><div><p>Historique personnel</p><h2>Rapports de service</h2></div></div>{reports.length ? <div className="reception-table-wrap"><table className="reception-table"><thead><tr><th>Service</th><th>Période</th><th>Réceptionniste</th><th>Clients réservés</th><th>Factures soldées</th><th>Écart de caisse</th><th></th></tr></thead><tbody>{reports.map((report) => { const rooms = [...new Set(report.summary.reservations?.clients.flatMap((client) => client.rooms ?? []) ?? [])]; return <tr key={report.id}><td>{report.shiftType === 'DAY' ? 'Jour' : 'Nuit'}</td><td>{formatDateTime(report.startedAt, timezone)} – {formatDateTime(report.endedAt, timezone)}</td><td>{report.user.name}</td><td>{report.summary.reservations?.clientsCount ?? '—'}<small>{report.summary.reservations ? `${report.summary.reservations.paidClients} payés · ${report.summary.reservations.unpaidClients} non payés` : 'Ancien rapport'}</small>{rooms.length > 0 && <small>Chambres : {rooms.join(', ')}</small>}</td><td>{report.summary.invoicesSettled?.count ?? '—'}</td><td>{formatMoney(report.summary.cash.variance, currency)}</td><td><button className="reception-button" type="button" onClick={() => viewReport(report)}>Voir / PDF</button></td></tr>; })}</tbody></table></div> : <EmptyState text="Aucun rapport de service enregistré." />}</div>
     <div className="reception-panel reception-table-panel"><div className="reception-panel-heading"><div><p>Historique personnel</p><h2>Sessions précédentes</h2></div></div>{sessions.filter((session) => session.status === 'CLOSED').length ? <div className="reception-table-wrap"><table className="reception-table"><thead><tr><th>Ouverture · date et heure</th><th>Fonds initial</th><th>Espèces théoriques</th><th>Comptées</th><th>Écart</th></tr></thead><tbody>{sessions.filter((session) => session.status === 'CLOSED').map((session) => <tr key={session.id}><td>{formatDateTime(session.openedAt, timezone)}</td><td>{formatMoney(session.openingAmount, currency)}</td><td>{formatMoney(session.expectedCash, currency)}</td><td>{session.countedAmount ? formatMoney(session.countedAmount, currency) : '—'}</td><td className={session.variance && session.variance !== '0.00' ? 'is-variance' : ''}>{session.variance ? formatMoney(session.variance, currency) : formatMoney(0, currency)}</td></tr>)}</tbody></table></div> : <EmptyState text="Aucune session clôturée." />}</div>
-  </>;
+  </div>;
 }
 
 function ClientDialog({ data, close, currency, timezone }: { data: { client: Client; reservations: Record<string, unknown>[] }; close: () => void; currency: string; timezone: string }) {
@@ -1820,10 +1988,9 @@ function ReceiptDialog({ data, close, currency, timezone }: { data: Receipt; clo
   return <div className="reception-modal-backdrop" role="presentation"><section className="reception-modal reception-receipt" role="dialog" aria-modal="true" aria-labelledby="reception-receipt-title"><div className="reception-modal-head"><div><p>BLISS HÔTEL · Reçu de paiement</p><h2 id="reception-receipt-title">Paiement enregistré</h2></div><button className="reception-icon-button" onClick={close} aria-label="Fermer"><X size={18} /></button></div><div className="reception-receipt-body"><img className="reception-print-logo" src="/logo.png" alt="Logo Bliss Hôtel" onError={(event) => { event.currentTarget.hidden = true; }} /><strong>{data.hotel}</strong><span>Client : {data.client}</span><span>Réservation : {data.reservation}</span><span>Date et heure : {formatDateTime(data.date, timezone)}</span><span>Moyen : {data.method}</span>{data.reference && <span>Référence de transaction : {data.reference}</span>}<b>{formatMoney(data.amount, currency)}</b></div><div className="reception-modal-actions"><button className="reception-button" onClick={close}>Fermer</button><button className="reception-button primary" onClick={() => window.print()}>Imprimer / enregistrer en PDF</button></div></section></div>;
 }
 
-function InvoicePrintDialog({ data, hotelName, currency, timezone, close }: {
+function InvoicePrintDialog({ data, hotelName, timezone, close }: {
   data: Folio;
   hotelName: string;
-  currency: string;
   timezone: string;
   close: () => void;
 }) {
@@ -1834,49 +2001,51 @@ function InvoicePrintDialog({ data, hotelName, currency, timezone, close }: {
     <div className="reception-modal-backdrop reception-invoice-backdrop" role="presentation">
       <section className="reception-modal reception-invoice-dialog" role="dialog" aria-modal="true" aria-labelledby="reception-invoice-title">
         <div className="reception-modal-head">
-          <div><p>Impression thermique · 80 mm</p><h2 id="reception-invoice-title">Facture {invoice.number}</h2></div>
+          <div><p>DOCUMENT PROFESSIONNEL · FORMAT A4</p><h2 id="reception-invoice-title">Facture {invoice.number}</h2></div>
           <button className="reception-icon-button" onClick={close} aria-label="Fermer"><X size={18} /></button>
         </div>
         <article className="reception-invoice-paper">
-          <header>
+          <header className="reception-invoice-brand">
             <img className="reception-print-logo" src="/logo.png" alt="Logo Bliss Hôtel" onError={(event) => { event.currentTarget.hidden = true; }} />
             <strong>{hotelName}</strong>
-            <h3>FACTURE</h3>
-            <span>N° {invoice.number}</span>
-            <span>Émise le {formatDateTime(invoice.issuedAt, timezone)}</span>
+            <span className="reception-invoice-contact"><b>Tél :</b> +242 06 486 68 62 / 06 731 80 99</span>
+            <span className="reception-invoice-contact">E-mail : blisshotel.cg@gmail.com</span>
+            <span className="reception-invoice-contact">20, Rue Likouala, Avenue de la paix</span>
+            <span className="reception-invoice-contact">RCC : CG-BZV-01-2018-A10-00105</span>
+          </header>
+          <header className="reception-invoice-title">
+            <div><span className="reception-invoice-eyebrow">DOCUMENT DE FACTURATION</span><h3>FACTURE</h3></div>
+            <div className="reception-invoice-number"><span>N° FACTURE</span><strong>{invoice.number}</strong><small>Émise le {formatDateTime(invoice.issuedAt, timezone)}</small></div>
           </header>
           <div className="reception-invoice-customer">
-            <strong>Payeur : {invoice.payerName ?? data.reservation.client.name}</strong>
-            <span>Client hébergé : {data.reservation.client.name}</span>
-            {data.reservation.client.phone && <span>{data.reservation.client.phone}</span>}
-            <span>Réservation : {data.reservation.reference}</span>
-            <span>Chambre : {data.reservation.room ?? 'à attribuer'}</span>
-            <span>Séjour : {formatDate(data.reservation.checkInDate)} – {formatDate(data.reservation.checkOutDate)}</span>
+            <section><span className="reception-invoice-eyebrow">FACTURÉ À</span><strong>{invoice.payerName ?? data.reservation.client.name}</strong><span>{data.reservation.client.name}{data.reservation.client.phone ? ` · ${data.reservation.client.phone}` : ''}</span></section>
+            <section><span className="reception-invoice-eyebrow">DÉTAILS DU SÉJOUR</span><strong>Réservation {data.reservation.reference}</strong><span>Chambre {data.reservation.room ?? 'à attribuer'}</span><span>{formatDate(data.reservation.checkInDate)} – {formatDate(data.reservation.checkOutDate)}</span></section>
           </div>
           <div className="reception-invoice-lines">
+            <div className="reception-invoice-line-head"><strong>DÉSIGNATION</strong><strong>MONTANT</strong></div>
             {data.lines.map((line) => (
               <div key={line.id}>
                 <span>{line.description}</span>
-                <strong>{formatMoney(line.amount, currency)}</strong>
+                <strong>{formatMoney(line.amount, invoice.currency)}</strong>
               </div>
             ))}
           </div>
           <div className="reception-invoice-totals">
-            <div><span>Total facturé</span><strong>{formatMoney(invoice.totalAmount, currency)}</strong></div>
-            <div><span>Déjà encaissé</span><strong>{formatMoney(data.paid, currency)}</strong></div>
-            <div className="is-due"><span>Reste à payer</span><strong>{formatMoney(data.balance, currency)}</strong></div>
+            <div><span>Total facturé</span><strong>{formatMoney(invoice.totalAmount, invoice.currency)}</strong></div>
+            <div><span>Déjà encaissé</span><strong>{formatMoney(data.paid, invoice.currency)}</strong></div>
+            <div className={`is-due${Number(data.balance) <= 0 ? ' is-paid' : ''}`}><span>{Number(data.balance) <= 0 ? 'Facture acquittée' : Number(data.paid) > 0 ? 'Solde restant dû' : 'Net à payer'}</span><strong>{formatMoney(data.balance, invoice.currency)}</strong></div>
           </div>
           <div className="reception-invoice-payments">
-            <strong>Mode(s) de paiement</strong>
-            {paymentMethodNames(data.payments).length
-              ? paymentMethodNames(data.payments).map((method) => <span key={method}>{method}</span>)
+            <strong>RÈGLEMENTS ENREGISTRÉS</strong>
+            {data.payments.length
+              ? data.payments.map((payment) => <div key={payment.id}><span>{payment.method} · {formatDateTime(payment.createdAt, timezone)}{payment.reference ? ` · Réf. ${payment.reference}` : ''}</span><b>{formatMoney(payment.amount, invoice.currency)}</b></div>)
               : <span>Aucun règlement enregistré</span>}
           </div>
           <footer>Merci de votre séjour.</footer>
         </article>
         <div className="reception-modal-actions">
           <button className="reception-button" onClick={close}>Fermer</button>
-          <button className="reception-button primary" onClick={() => window.print()}>Imprimer la facture</button>
+          <button className="reception-button primary" onClick={() => window.print()}>Imprimer / enregistrer en PDF</button>
         </div>
       </section>
     </div>
@@ -1897,7 +2066,7 @@ function FolioListSection({ data, filter, setFilter, open, openingId, currency, 
   return <div className="reception-panel reception-table-panel">
     <div className="reception-panel-heading"><div><p>Facturation de l’établissement</p><h2>Factures & folios</h2></div></div>
     <div className="reception-period-filter"><span>Filtrer :</span>{filters.map(([value, label]) => <button key={value} type="button" className={`reception-chip${filter === value ? ' is-active' : ''}`} onClick={() => setFilter(value)}>{label}</button>)}</div>
-    {data.length ? <div className="reception-table-wrap"><table className="reception-table"><thead><tr><th>Référence / client</th><th>Créée par</th><th>Période</th><th>Facture / payeur</th><th>Règlement</th><th>Facturé / encaissé / dû</th><th></th></tr></thead><tbody>{data.map((item) => <tr key={item.id}><td><strong>{item.reservation.reference}</strong><small>{item.reservation.client.name} · {item.reservation.room ? `ch. ${item.reservation.room}` : 'chambre à attribuer'}</small></td><td>{item.reservation.createdByName ?? '—'}</td><td>{item.reservation.stayType === 'SIESTA' ? 'Sieste · 3 h 30' : `${nightsBetween(item.reservation.checkInDate, item.reservation.checkOutDate)} nuitée(s)`}<small>{formatDate(item.reservation.checkInDate)} – {formatDate(item.reservation.checkOutDate)}</small></td><td>{item.invoice ? <>{item.invoice.number}<small>Payeur : {item.invoice.payerName ?? item.reservation.client.name}</small><small>Émise le {formatDateTime(item.invoice.issuedAt, timezone)}</small></> : '—'}</td><td><span className={`reception-status status-${item.paymentStatus}`}>{labels[item.paymentStatus]}</span></td><td><strong>{formatMoney(item.billed, currency)}</strong><small>Encaissé {formatMoney(item.paid, currency)} · Dû {formatMoney(item.balance, currency)}</small></td><td><button type="button" className="reception-button" disabled={openingId === item.id} onClick={() => open(item.id)}>{openingId === item.id ? 'Ouverture…' : 'Ouvrir'}</button></td></tr>)}</tbody></table></div> : <EmptyState text="Aucun folio pour ce filtre." />}
+    {data.length ? <div className="reception-table-wrap"><table className="reception-table"><thead><tr><th>Référence / client</th><th>Créée par</th><th>Période</th><th>Facture / payeur</th><th>Règlement</th><th>Facturé / encaissé / dû</th><th></th></tr></thead><tbody>{data.map((item) => { const itemCurrency = item.invoice?.currency ?? currency; return <tr key={item.id}><td><strong>{item.reservation.reference}</strong><small>{item.reservation.client.name} · {item.reservation.room ? `ch. ${item.reservation.room}` : 'chambre à attribuer'}</small></td><td>{item.reservation.createdByName ?? '—'}</td><td>{item.reservation.stayType === 'SIESTA' ? 'Sieste · 3 h 30' : `${nightsBetween(item.reservation.checkInDate, item.reservation.checkOutDate)} nuitée(s)`}<small>{formatDate(item.reservation.checkInDate)} – {formatDate(item.reservation.checkOutDate)}</small></td><td>{item.invoice ? <>{item.invoice.number}<small>Payeur : {item.invoice.payerName ?? item.reservation.client.name}</small><small>Émise le {formatDateTime(item.invoice.issuedAt, timezone)}</small></> : '—'}</td><td><span className={`reception-status status-${item.paymentStatus}`}>{labels[item.paymentStatus]}</span></td><td><strong>{formatMoney(item.billed, itemCurrency)}</strong><small>Encaissé {formatMoney(item.paid, itemCurrency)} · Dû {formatMoney(item.balance, itemCurrency)}</small></td><td><button type="button" className="reception-button" disabled={openingId === item.id} onClick={() => open(item.id)}>{openingId === item.id ? 'Ouverture…' : 'Ouvrir'}</button></td></tr>; })}</tbody></table></div> : <EmptyState text="Aucun folio pour ce filtre." />}
   </div>;
 }
 
@@ -1971,16 +2140,41 @@ function ActivitySection({ data, filters, setFilters, currency, timezone }: {
   currency: string;
   timezone: string;
 }) {
-  return <div className="reception-panel reception-table-panel">
+  const grouping = filters.period === 'day' ? 'day' : filters.period === 'week' ? 'week' : filters.period === 'month' ? 'month' : 'year';
+  const buckets = new Map<string, ActivityEvent[]>();
+  for (const event of data) {
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(event.createdAt));
+    const year = parts.find((part) => part.type === 'year')?.value ?? '0000';
+    const month = parts.find((part) => part.type === 'month')?.value ?? '01';
+    const day = parts.find((part) => part.type === 'day')?.value ?? '01';
+    let key = `${year}-${month}-${day}`;
+    if (grouping === 'week') {
+      const monday = new Date(`${key}T12:00:00.000Z`);
+      monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
+      key = monday.toISOString().slice(0, 10);
+    } else if (grouping === 'month') key = `${year}-${month}`;
+    else if (grouping === 'year') key = year;
+    buckets.set(key, [...(buckets.get(key) ?? []), event]);
+  }
+  const bucketLabel = (key: string) => {
+    if (grouping === 'year') return key;
+    const date = new Date(`${key.length === 7 ? `${key}-01` : key}T12:00:00.000Z`);
+    return grouping === 'week'
+      ? `Semaine du ${new Intl.DateTimeFormat('fr-FR', { dateStyle: 'medium', timeZone: timezone }).format(date)}`
+      : grouping === 'month'
+        ? new Intl.DateTimeFormat('fr-FR', { month: 'long', year: 'numeric', timeZone: timezone }).format(date)
+        : new Intl.DateTimeFormat('fr-FR', { dateStyle: 'full', timeZone: timezone }).format(date);
+  };
+  return <div className="reception-panel reception-table-panel reception-activity-page">
     <div className="reception-panel-heading"><div><p>Traçabilité</p><h2>Historique des opérations</h2></div><History size={18} /></div>
     <div className="reception-period-filter">
       <span>Portée :</span>
       <button type="button" className={`reception-chip${filters.scope === 'mine' ? ' is-active' : ''}`} onClick={() => setFilters({ ...filters, scope: 'mine' })}>Mes opérations</button>
       <button type="button" className={`reception-chip${filters.scope === 'all' ? ' is-active' : ''}`} onClick={() => setFilters({ ...filters, scope: 'all' })}>Toute l’équipe</button>
       <span>Période :</span>
-      {(['day', 'week', 'month', 'all'] as const).map((value) => <button key={value} type="button" className={`reception-chip${filters.period === value ? ' is-active' : ''}`} onClick={() => setFilters({ ...filters, period: value })}>{{ day: 'Jour', week: 'Semaine', month: 'Mois', all: 'Tout' }[value]}</button>)}
+      {(['day', 'week', 'month', 'year', '99years'] as const).map((value) => <button key={value} type="button" className={`reception-chip${filters.period === value ? ' is-active' : ''}`} onClick={() => setFilters({ ...filters, period: value })}>{{ day: 'Jour', week: 'Semaine', month: 'Mois', year: 'Année', '99years': '99 ans' }[value]}</button>)}
     </div>
-    {data.length ? <div className="reception-table-wrap"><table className="reception-table"><thead><tr><th>Date & heure</th><th>Auteur</th><th>Opération</th><th>Cible</th><th>Résultat</th></tr></thead><tbody>{data.map((event) => <tr key={event.id}><td>{formatDateTime(event.createdAt, timezone)}</td><td>{event.mine ? <strong>{event.actor} (moi)</strong> : event.actor}</td><td>{activityLabel(event.action)}{activityDetail(event, currency) && <small>{activityDetail(event, currency)}</small>}</td><td><small>{event.targetId ?? '—'}</small></td><td><span className={`reception-status status-${event.result.toLowerCase()}`}>{event.result === 'SUCCESS' ? 'Succès' : 'Échec'}</span></td></tr>)}</tbody></table></div> : <EmptyState text="Aucune opération sur cette période." />}
+    {data.length ? <div className="reception-table-wrap"><table className="reception-table"><thead><tr><th>Date & heure</th><th>Auteur</th><th>Opération</th><th>Cible</th><th>Résultat</th></tr></thead><tbody>{[...buckets.entries()].map(([key, events]) => <Fragment key={key}><tr className="reception-activity-group"><th colSpan={5}>{bucketLabel(key)} <small>· {events.length} opération(s)</small></th></tr>{events.map((event) => <tr key={event.id}><td>{formatDateTime(event.createdAt, timezone)}</td><td>{event.mine ? <strong>{event.actor} (moi)</strong> : event.actor}</td><td>{activityLabel(event.action)}{activityDetail(event, currency) && <small>{activityDetail(event, currency)}</small>}</td><td><small>{event.targetId ?? '—'}</small></td><td><span className={`reception-status status-${event.result.toLowerCase()}`}>{event.result === 'SUCCESS' ? 'Succès' : 'Échec'}</span></td></tr>)}</Fragment>)}</tbody></table></div> : <EmptyState text="Aucune opération sur cette période." />}
     <p className="reception-note">Les opérations des collègues sont consultables en lecture seule.</p>
   </div>;
 }
@@ -2028,7 +2222,7 @@ function ProfileSection({ name, account, permissions, currency, session, passwor
         </form>
       </article>
       <article className="reception-panel reception-profile-permissions"><div className="reception-panel-heading"><div><p>Droits attribués</p><h2>Mes permissions</h2></div><ShieldAlert size={18} /></div>
-        <div className="reception-permission-list">{permissions.slice().sort().map((permission) => <span key={permission} className="reception-chip">{permission}</span>)}</div>
+        <div className="reception-permission-list">{permissions.slice().sort().map((permission) => <span key={permission} className="reception-chip">{permissionLabel(permission)}</span>)}</div>
       </article>
     </div>
   </>;

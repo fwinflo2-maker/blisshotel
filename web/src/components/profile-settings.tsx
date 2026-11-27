@@ -73,11 +73,11 @@ export function ProfileForms({ name, only }: { name: string; only?: 'name' | 'pa
   </div>;
 }
 
-/** Floating « Mon profil » button opening the profile dialog. */
-export function ProfileLauncher({ name, canEditName = false }: { name: string; canEditName?: boolean }) {
+/** « Mon profil » button opening the profile dialog from the dashboard navigation. */
+export function ProfileLauncher({ name, canEditName = false, className }: { name: string; canEditName?: boolean; className?: string }) {
   const [open, setOpen] = useState(false);
   return <>
-    <button type="button" className={styles.launcher} onClick={() => setOpen(true)}><UserRound size={16} />Mon profil</button>
+    <button type="button" className={`${styles.launcher}${className ? ` ${className}` : ''}`} onClick={() => setOpen(true)}><UserRound size={16} />Mon profil</button>
     {open && <div className={styles.backdrop} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false); }}>
       <section className={styles.dialog} role="dialog" aria-modal="true" aria-label="Mon profil">
         <div className={styles.head}><h2>Mon profil</h2><button type="button" className={styles.close} onClick={() => setOpen(false)} aria-label="Fermer"><X size={18} /></button></div>

@@ -15,9 +15,9 @@ const shiftTypeSchema = z.enum(['DAY', 'NIGHT']);
 export async function GET(request: Request) {
   try {
     const session = await requireSession();
-    if (!session.user.platformAdmin) await authorizedScope('shift_reports.view');
+    if (!session.user.platformAdmin && !['GENERAL_MANAGER', 'BAR_SERVER'].includes(session.user.role?.code ?? '')) await authorizedScope('shift_reports.view');
     const roleCode = session.user.role?.code;
-    const canViewAllReports = session.user.platformAdmin || roleCode === 'OWNER' || roleCode === 'HOTEL_ADMIN';
+    const canViewAllReports = session.user.platformAdmin || roleCode === 'OWNER' || roleCode === 'HOTEL_ADMIN' || roleCode === 'GENERAL_MANAGER';
 
     const params = new URL(request.url).searchParams;
     const fromText = params.get('from');
@@ -54,8 +54,55 @@ export async function GET(request: Request) {
       hotelConfiguration(),
     ]);
 
+    const receptionReports = reports.filter((report) => {
+      const summary = report.summary as unknown as { department?: string };
+      return summary.department !== 'BAR_RESTAURANT';
+    });
+    const reportUserIds = [...new Set(receptionReports.map((report) => report.userId))];
+    const minimumStart = receptionReports.length ? new Date(Math.min(...receptionReports.map((report) => report.startedAt.getTime()))) : new Date(0);
+    const maximumEnd = receptionReports.length ? new Date(Math.max(...receptionReports.map((report) => report.endedAt.getTime()))) : new Date(0);
+    const stayActivity = receptionReports.length ? await db.stay.findMany({
+      where: {
+        OR: [
+          { checkedInBy: { in: reportUserIds }, checkInRecordedAt: { gte: minimumStart, lte: maximumEnd } },
+          { checkedOutBy: { in: reportUserIds }, checkOutRecordedAt: { gte: minimumStart, lte: maximumEnd } },
+        ],
+      },
+      select: {
+        checkedInBy: true,
+        checkInRecordedAt: true,
+        checkedOutBy: true,
+        checkOutRecordedAt: true,
+        reservation: { select: { reference: true, client: { select: { name: true } }, room: { select: { number: true } } } },
+      },
+    }) : [];
+
     return NextResponse.json({
-      reports: reports.map(serializeShiftReport),
+      reports: reports.map((report) => {
+        const serialized = serializeShiftReport(report);
+        const summary = report.summary as unknown as { department?: string; operations?: { checkIns?: number; checkOuts?: number }; [key: string]: unknown };
+        if (summary.department === 'BAR_RESTAURANT') return serialized;
+        const checkIns = stayActivity
+          .filter((stay) => stay.checkedInBy === report.userId && stay.checkInRecordedAt
+            && stay.checkInRecordedAt >= report.startedAt && stay.checkInRecordedAt <= report.endedAt)
+          .map((stay) => ({ reference: stay.reservation.reference, clientName: stay.reservation.client.name, roomNumber: stay.reservation.room?.number ?? null, recordedAt: stay.checkInRecordedAt!.toISOString() }));
+        const checkOuts = stayActivity
+          .filter((stay) => stay.checkedOutBy === report.userId && stay.checkOutRecordedAt
+            && stay.checkOutRecordedAt >= report.startedAt && stay.checkOutRecordedAt <= report.endedAt)
+          .map((stay) => ({ reference: stay.reservation.reference, clientName: stay.reservation.client.name, roomNumber: stay.reservation.room?.number ?? null, recordedAt: stay.checkOutRecordedAt!.toISOString() }));
+        return {
+          ...serialized,
+          summary: {
+            ...summary,
+            operations: {
+              ...(summary.operations ?? {}),
+              checkIns: Math.max(checkIns.length, summary.operations?.checkIns ?? 0),
+              checkOuts: Math.max(checkOuts.length, summary.operations?.checkOuts ?? 0),
+            },
+            stayOperations: { checkIns, checkOuts },
+          },
+        };
+      }),
       total,
       page,
       pageSize: 25,

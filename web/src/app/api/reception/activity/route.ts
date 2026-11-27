@@ -32,11 +32,13 @@ export async function GET(request: Request) {
         to.setUTCDate(to.getUTCDate() + 1);
         createdAt.lte = parseHotelDateTime(`${to.toISOString().slice(0, 10)}T00:00`, configuration.timezone);
       }
-    } else if (period === 'day' || period === 'week' || period === 'month') {
-      const days = period === 'day' ? 1 : period === 'week' ? 7 : 30;
+    } else if (['day', 'week', 'month', 'year', '99years'].includes(period)) {
       const todayKey = new Intl.DateTimeFormat('en-CA', { timeZone: configuration.timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
       const start = parseDateOnly(todayKey);
-      start.setUTCDate(start.getUTCDate() - (days - 1));
+      if (period === 'week') start.setUTCDate(start.getUTCDate() - ((start.getUTCDay() + 6) % 7));
+      if (period === 'month') start.setUTCDate(1);
+      if (period === 'year') start.setUTCMonth(0, 1);
+      if (period === '99years') start.setUTCFullYear(start.getUTCFullYear() - 99);
       createdAt = { gte: parseHotelDateTime(`${start.toISOString().slice(0, 10)}T00:00`, configuration.timezone) };
     }
 

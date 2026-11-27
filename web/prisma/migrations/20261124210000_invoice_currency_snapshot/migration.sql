@@ -1,0 +1,2 @@
+ALTER TABLE `Invoice`
+    ADD COLUMN `currency` CHAR(3) NOT NULL DEFAULT 'XAF';

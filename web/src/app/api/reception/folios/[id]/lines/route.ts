@@ -1,9 +1,10 @@
-import { Prisma } from '@prisma/client';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authorizedScope } from '@/server/auth';
 import { AppError } from '@/server/policy';
 import { db } from '@/server/db';
+import { hotelConfiguration } from '@/server/hotel';
+import { convertToXaf } from '@/server/currency';
 
 export const instant = false;
 
@@ -18,7 +19,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     if (!parsed.success) return NextResponse.json({ error: 'Libellé ou montant de prestation invalide.' }, { status: 400 });
     const input = parsed.data;
     const scope = await authorizedScope('folios.manage');
-    const amount = new Prisma.Decimal(input.amount);
+    const configuration = await hotelConfiguration();
+    const amount = await convertToXaf(input.amount, configuration.currency);
     if (!amount.gt(0)) return NextResponse.json({ error: 'Le montant doit être supérieur à zéro.' }, { status: 400 });
     const { id } = await params;
 
@@ -42,7 +44,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           action: 'RECEPTION_FOLIO_SERVICE_ADD',
           result: 'SUCCESS',
           targetId: created.id,
-          details: { folioId: id, amount: amount.toFixed(2) },
+          details: {
+            folioId: id,
+            amount: amount.toFixed(2),
+            inputAmount: input.amount,
+            inputCurrency: configuration.currency,
+          },
         },
       });
       return created;

@@ -14,8 +14,9 @@ async function loadJson<T>(url: string): Promise<T> {
   return data;
 }
 
-function formatMoney(value: string, currency: string) {
-  return new Intl.NumberFormat('fr-FR', { style: 'currency', currency }).format(Number(value));
+function formatMoney(value: string, _currency: string) {
+  void _currency;
+  return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'XAF' }).format(Number(value));
 }
 
 function formatDateTime(value: string, timezone: string) {
@@ -71,7 +72,7 @@ export default function ShiftReportsWorkspace() {
   const pages = Math.max(1, Math.ceil(total / 25));
   return <section className="sa-panel sa-table-panel">
     <div className="sa-panel-heading">
-      <div><p>Réception · lecture et export</p><h2>Rapports de fin de service <small>{total}</small></h2></div>
+      <div><p>Réception &amp; bar-restaurant · lecture et export</p><h2>Rapports de fin de service <small>{total}</small></h2></div>
       <button className="sa-button" type="button" disabled={busy} onClick={() => void load(page)}><RefreshCw size={14} /> Actualiser</button>
     </div>
     <form className="sa-audit-filters" onSubmit={applyFilters}>
@@ -83,9 +84,9 @@ export default function ShiftReportsWorkspace() {
     {error && <div className="sa-alert is-error" role="alert">{error}</div>}
     {busy && <div className="sa-loading" role="status">Chargement des rapports…</div>}
     {!busy && reports.length ? <div className="sa-table-wrap"><table className="sa-table">
-      <thead><tr><th>Date / service</th><th>Réceptionniste</th><th>Clôture</th><th>Paiements</th><th>Dépenses</th><th>Écart caisse</th><th>Document</th></tr></thead>
+      <thead><tr><th>Date / service</th><th>Responsable</th><th>Clôture</th><th>Paiements</th><th>Dépenses</th><th>Écart caisse</th><th>Document</th></tr></thead>
       <tbody>{reports.map((report) => <tr key={report.id}>
-        <td><strong>{report.shiftType === 'DAY' ? 'Jour' : 'Nuit'}</strong><small>{report.shiftDate}</small><small>{formatDateTime(report.startedAt, hotel.timezone)} – {formatDateTime(report.endedAt, hotel.timezone)}</small></td>
+        <td><strong>{report.summary.department === 'BAR_RESTAURANT' ? 'Bar & restaurant · 08 h à 08 h le lendemain' : `Réception · ${report.shiftType === 'DAY' ? 'Jour' : 'Nuit'}`}</strong><small>{report.shiftDate}</small><small>Heures réelles : {formatDateTime(report.startedAt, hotel.timezone)} – {formatDateTime(report.endedAt, hotel.timezone)}</small></td>
         <td>{report.user.name}</td>
         <td>{formatMoney(report.summary.cash.expectedCash, hotel.currency)}<small>Compté {formatMoney(report.summary.cash.countedAmount, hotel.currency)}</small></td>
         <td>{formatMoney(report.summary.payments.total, hotel.currency)}<small>{report.summary.payments.count} règlement(s)</small></td>

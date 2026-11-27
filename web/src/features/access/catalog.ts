@@ -8,7 +8,7 @@ export const groups = {
   SENSITIVE: ['payments.refund', 'payments.reverse', 'invoices.correct', 'cash_sessions.reopen', 'approvals.view', 'approvals.decide', 'stays.checkin.correct'],
   ROOMS: ['rooms.view', 'rooms.manage', 'rooms.block', 'rooms.release', 'rooms.rates.view'],
   HOUSEKEEPING: ['housekeeping.tasks.view', 'housekeeping.tasks.assign', 'housekeeping.tasks.execute', 'housekeeping.rooms.inspect', 'housekeeping.agents.manage'],
-  RESTAURANT: ['restaurant.menu.manage', 'restaurant.orders.manage', 'restaurant.folio.transfer'],
+  RESTAURANT: ['restaurant.menu.manage', 'restaurant.orders.manage', 'restaurant.folio.transfer', 'restaurant.stock.view', 'restaurant.stock.count', 'restaurant.stock.manage', 'restaurant.reports.view', 'restaurant.tables.manage'],
   MAINTENANCE: ['maintenance.view', 'maintenance.incidents.report', 'maintenance.tickets.manage', 'maintenance.rooms.block', 'maintenance.rooms.release'],
   PLATFORM: ['platform.manage'],
 } as const;
@@ -54,7 +54,7 @@ export function permissionsWithEnabledFeatures(
 
 const base: PermissionCode[] = ['dashboard.view'];
 export const roleTemplates: { code: string; name: string; optional?: boolean; permissions: PermissionCode[] }[] = [
-  { code: 'SUPER_ADMIN', name: 'Super Administrateur', permissions: ['platform.manage'] },
+  { code: 'SUPER_ADMIN', name: 'Super Administrateur', permissions: ['platform.manage', 'accounting.view', 'restaurant.reports.view'] },
   {
     code: 'OWNER',
     name: 'Propriétaire',
@@ -72,13 +72,13 @@ export const roleTemplates: { code: string; name: string; optional?: boolean; pe
       ...groups.MAINTENANCE,
     ],
   },
-  { code: 'GENERAL_MANAGER', name: 'Directeur Général', permissions: [...base, 'rooms.view', 'reservations.view', 'stays.view', 'reports.financial.view', 'approvals.view', 'approvals.decide', 'audit.view'] },
+  { code: 'GENERAL_MANAGER', name: 'Directeur Général', permissions: [...base, 'clients.view', 'rooms.view', 'reservations.view', 'stays.view', 'shift_reports.view', 'reports.financial.view', 'approvals.view', 'approvals.decide', 'audit.view'] },
   { code: 'HOTEL_ADMIN', name: 'Administrateur Hôtel', permissions: ['dashboard.view', 'rooms.view'] },
   { code: 'RECEPTIONIST', name: 'Réceptionniste', permissions: [...base, ...groups.RESERVATIONS, 'rooms.view', 'rooms.block', 'rooms.release', ...groups.FRONT_DESK, ...groups.CASHIER_OPERATIONS, ...groups.SHIFT_REPORTS, 'restaurant.folio.transfer'] },
-  { code: 'ACCOUNTANT', name: 'Comptable', permissions: [...base, ...groups.ACCOUNTING, 'invoices.view', 'payments.view'] },
+  { code: 'ACCOUNTANT', name: 'Comptable', permissions: [...base, 'clients.view', ...groups.ACCOUNTING, 'invoices.view', 'payments.view', 'restaurant.reports.view'] },
   { code: 'GOUVERNANTE', name: 'Gouvernante', permissions: [...base, 'rooms.view', 'housekeeping.tasks.assign', 'housekeeping.rooms.inspect', 'housekeeping.agents.manage'] },
   { code: 'HOUSEKEEPER', name: "Agent d’entretien", permissions: [...base, 'housekeeping.tasks.execute'] },
   { code: 'RESTAURANT_MANAGER', name: 'Responsable Restaurant et Bar', permissions: [...base, ...groups.RESTAURANT] },
-  { code: 'BAR_SERVER', name: 'Servant(e) du bar', permissions: [...base, 'restaurant.orders.manage'] },
+  { code: 'BAR_SERVER', name: 'Servant(e) du bar', permissions: [...base, 'restaurant.orders.manage', 'restaurant.stock.view', 'restaurant.stock.count'] },
   { code: 'MAINTENANCE_MANAGER', name: 'Responsable Maintenance', permissions: [...base, ...groups.MAINTENANCE] },
 ];

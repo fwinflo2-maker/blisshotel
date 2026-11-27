@@ -29,7 +29,7 @@ export async function POST(request: Request) {
       update: { attempts: { increment: 1 }, expiresAt: limited && limited.expiresAt > now ? limited.expiresAt : new Date(now.getTime() + 15 * 60 * 1000) },
       create: { key: rateKey, attempts: 1, expiresAt: new Date(now.getTime() + 15 * 60 * 1000) },
     });
-    await db.auditLog.create({ data: { action: "AUTH_LOGIN", result: "FAILURE", details: { reason: "invalid_credentials" } } });
+    await db.auditLog.create({ data: { action: "AUTH_LOGIN", result: "FAILURE", details: { reason: "invalid_credentials", email: parsed.data.email.toLowerCase(), rateLimitCount: (limited?.attempts ?? 0) + 1 } } });
     return NextResponse.json({ error: "Email ou mot de passe incorrect." }, { status: 401 });
   }
 

@@ -13,6 +13,7 @@ export const restaurantOrderInclude = {
   },
   lines: { orderBy: { name: 'asc' } },
   folioLine: { select: { id: true } },
+  paymentMethod: { select: { id: true, code: true, name: true } },
 } satisfies Prisma.RestaurantOrderInclude;
 
 type RestaurantOrderWithDetails = Prisma.RestaurantOrderGetPayload<{ include: typeof restaurantOrderInclude }>;

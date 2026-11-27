@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { db } from '@/server/db';
-import { platformApi } from '@/server/platform-admin';
+import { hotelManagementApi } from '@/server/platform-admin';
 import { hotelConfiguration } from '@/server/hotel';
 import { parseDateOnly, parseHotelDateTime } from '@/server/reception';
 
@@ -14,7 +14,7 @@ const dateSchema = z.object({
 
 /** Per-staff audit trail and operational performance. Read-only; it grants no mutation rights. */
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  return platformApi(async (actor) => {
+  return hotelManagementApi(async (actor) => {
     const { id } = await params;
     const url = new URL(request.url);
     const parsed = dateSchema.safeParse({ from: url.searchParams.get('from') ?? undefined, to: url.searchParams.get('to') ?? undefined });

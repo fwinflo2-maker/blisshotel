@@ -2,12 +2,13 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { ProfileLauncher } from '@/components/profile-settings';
+import OwnerOverview from '../proprietaire/owner-overview';
+import OwnerClientRecords from '../proprietaire/owner-client-records';
 import {
-  Activity, BedDouble, Building2, ChevronDown, CircleHelp, ClipboardList, CreditCard, Database, FileText,
-  Fingerprint, LayoutDashboard, LockKeyhole, LogOut, Menu, Plus, Search, Settings2, Shield,
+  Activity, BedDouble, Building2, ChevronDown, CircleHelp, ClipboardList, CreditCard, Database, Eye, FileText,
+  LayoutDashboard, LockKeyhole, LogOut, Menu, Plus, Search, Settings2, Shield,
   ShieldAlert, Users, X,
 } from 'lucide-react';
-import { CockpitBars, CockpitDonut } from '@/components/cockpit-charts';
 import { DashboardThemeToggle, useDashboardTheme } from '@/components/dashboard-theme';
 import ShiftReportsWorkspace from '@/features/shift-reports/shift-reports-workspace';
 import AgentAccountForm from '@/features/housekeeping/agent-account-form';
@@ -15,11 +16,11 @@ import RoomAssignments from '@/features/rooms/room-assignments';
 import MyRooms from '@/features/rooms/my-rooms';
 import HotelAdminPermissions from '@/features/rooms/hotel-admin-permissions';
 import OperationsCenter from '@/features/workspace/operations-center';
-import GodModeProfileViewer from '@/features/god-mode/profile-viewer';
+import { hotelCurrencies, hotelCurrencyLabels, type HotelCurrency } from '@/features/hotel/currency';
 import { useRouter } from 'next/navigation';
 import './super-admin.css';
 
-type Section = 'overview' | 'operations' | 'god-mode' | 'users' | 'inventory' | 'room-assignments' | 'admin-permissions' | 'my-rooms' | 'roles' | 'settings' | 'audit' | 'reception-cancellations' | 'shift-reports' | 'diagnostics';
+type Section = 'overview' | 'operations' | 'clients' | 'users' | 'inventory' | 'room-assignments' | 'admin-permissions' | 'my-rooms' | 'roles' | 'settings' | 'audit' | 'reception-cancellations' | 'shift-reports' | 'diagnostics' | 'security';
 type Audience = 'platform' | 'owner' | 'hotel-admin';
 type User = { id: string; email: string; name: string; active: boolean; platformAdmin: boolean; lastLoginAt: string | null; createdAt: string; role: { code: string; name: string } | null };
 type StaffActivity = {
@@ -29,13 +30,14 @@ type StaffActivity = {
   events: { id: string; action: string; result: string; targetId: string | null; details: unknown; createdAt: string }[];
 };
 type Inventory = {
+  currency: HotelCurrency;
   categories: { id: string; name: string; capacity: number | null; nightlyRate: string; siestaRate: string | null; active: boolean; roomCount: number }[];
   rooms: { id: string; number: string; floor: string | null; status: string; currentGuest: string | null; housekeepingStatus: string; categoryId: string; category: string; nightlyRateMin: string | null; nightlyRateMax: string | null }[];
   paymentMethods: { id: string; code: string; name: string; active: boolean }[];
 };
 type Permission = { code: string; group: string };
 type Role = { id: string; code: string; name: string; optional: boolean; permissions: string[]; _count: { users: number } };
-type HotelSettings = { name: string; currency: string; timezone: string; checkInTime: string | null; checkOutTime: string | null; allowCheckoutWithBalance: boolean };
+type HotelSettings = { name: string; currency: HotelCurrency; usdRate: { xafPerUnit: string; effectiveAt: string; source: string } | null; timezone: string; checkInTime: string | null; checkOutTime: string | null; allowCheckoutWithBalance: boolean };
 type PlatformFeature = { key: string; name: string; description: string; enabled: boolean; updatedAt: string | null };
 type AuditEvent = { id: string; actorId: string | null; action: string; result: string; targetId: string | null; details: unknown; createdAt: string };
 type ReceptionCancellation = {
@@ -45,13 +47,23 @@ type ReceptionCancellation = {
   previousStatus: string | null;
   reservation: { id: string; reference: string; client: { name: string }; room: { number: string } | null } | null;
 };
-type Overview = { counts: { users: number; activeUsers: number; rooms: number; reservations: number }; services?: { database: string; email: string; recentFailures: number; recentFailureEvents: { id: string; action: string; createdAt: string }[] }; version?: string; environment?: string };
+type Overview = {
+  counts: { users: number; activeUsers: number; suspendedUsers: number; platformAdmins: number; owners: number; hotelAdmins: number; managers: number; receptionists: number; otherStaff: number; newUsersThisWeek: number; activeSessions: number };
+  restaurantModule: { activeManagers: number; activeBarStaff: number; activeMenuItems: number; lowStock: number; outOfStock: number; servedOrders24h: number };
+  cashCommissions: { total: string; count: number; byReceptionist: { receptionist: string; amount: string }[] };
+  security: { failedLogins24h: number; lockedAccounts: number; rateLimitAttempts: number; recentFailures: { id: string; action: string; result: string; createdAt: string; email: string | null }[]; sensitiveEvents: { id: string; actorId: string | null; actor: string; action: string; result: string; targetId: string | null; createdAt: string }[] };
+  recentLogins: { id: string; name: string; email: string; platformAdmin: boolean; lastLoginAt: string | null; role: { name: string; code: string } | null }[];
+  services: { backend: string; database: string; email: string; frontend: string; scheduledTasks: string; backups: string; storage: string; recentFailures: number };
+  version: string; environment: string;
+  availability: { monitoring: string; mfa: string; backupHistory: string; multiTenant: string };
+};
 
 const menu: { id: Section; label: string; icon: typeof LayoutDashboard; group: string }[] = [
   { id: 'overview', label: 'Vue globale', icon: LayoutDashboard, group: 'Plateforme' },
   { id: 'operations', label: 'Cockpit hôtel', icon: Activity, group: 'Plateforme' },
-  { id: 'god-mode', label: 'God Mode · Profils', icon: Fingerprint, group: 'Gestion' },
+  { id: 'clients', label: 'Clients et séjours', icon: Users, group: 'Gestion' },
   { id: 'users', label: 'Utilisateurs', icon: Users, group: 'Gestion' },
+  { id: 'security', label: 'Sécurité & sessions', icon: LockKeyhole, group: 'Sécurité' },
   { id: 'inventory', label: 'Inventaire hôtel', icon: BedDouble, group: 'Gestion' },
   { id: 'room-assignments', label: 'Attribution des chambres', icon: BedDouble, group: 'Gestion' },
   { id: 'admin-permissions', label: 'Permissions individuelles', icon: Shield, group: 'Accès' },
@@ -61,7 +73,7 @@ const menu: { id: Section; label: string; icon: typeof LayoutDashboard; group: s
   { id: 'audit', label: 'Journal d’audit', icon: ClipboardList, group: 'Sécurité' },
   { id: 'reception-cancellations', label: 'Annulations Réception', icon: ClipboardList, group: 'Sécurité' },
   { id: 'shift-reports', label: 'Rapports de service', icon: FileText, group: 'Sécurité' },
-  { id: 'diagnostics', label: 'Diagnostic', icon: Activity, group: 'Sécurité' },
+  { id: 'diagnostics', label: 'Diagnostic', icon: Activity, group: 'Sécurité' }
 ];
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
@@ -69,8 +81,9 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: { 'Content-Type': 'application/json', ...init?.headers },
   });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error ?? 'La requête a échoué.');
+  const data = await response.json().catch(() => null) as ({ error?: string } & T) | null;
+  if (!response.ok) throw new Error(data?.error ?? `Le serveur a refusé la requête (HTTP ${response.status}).`);
+  if (!data) throw new Error('Le serveur a renvoyé une réponse invalide.');
   return data as T;
 }
 
@@ -79,12 +92,43 @@ function formatDate(value: string | null) {
   return new Intl.DateTimeFormat('fr-FR', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
 }
 
+const activityActionLabels: Record<string, string> = {
+  RECEPTION_CASH_SESSION_OPEN: 'Ouverture de caisse',
+  RECEPTION_CASH_SESSION_CLOSE: 'Clôture de caisse',
+  RECEPTION_SHIFT_REPORT_CREATE: 'Création du rapport de service',
+  RECEPTION_CLIENT_CREATE: 'Création d’un client',
+  RECEPTION_CLIENT_UPDATE: 'Modification d’un client',
+  RECEPTION_CLIENT_ID_DOCUMENT_SET: 'Ajout d’une pièce d’identité',
+  RECEPTION_RESERVATION_CREATE: 'Création d’une réservation',
+  RECEPTION_RESERVATION_UPDATE: 'Modification d’une réservation',
+  RECEPTION_RESERVATION_CONFIRM: 'Confirmation d’une réservation',
+  RECEPTION_RESERVATION_CANCEL: 'Annulation d’une réservation',
+  RECEPTION_STAY_CHECK_IN: 'Arrivée d’un client',
+  RECEPTION_STAY_CHECK_IN_CORRECTED: 'Correction de l’arrivée d’un client',
+  RECEPTION_STAY_CHECK_OUT: 'Départ d’un client',
+  RECEPTION_STAY_EXTEND: 'Prolongation d’un séjour',
+  RECEPTION_STAY_OCCUPANTS_UPDATE: 'Modification des occupants',
+  RECEPTION_ROOM_MOVE: 'Changement de chambre',
+  RECEPTION_FOLIO_SERVICE_ADD: 'Ajout d’un service à la facture',
+  RECEPTION_INVOICE_ISSUE: 'Émission d’une facture',
+  RECEPTION_PAYMENT_COLLECT: 'Encaissement d’un paiement',
+  RECEPTION_PAYMENT_DIRECT: 'Encaissement direct',
+};
+
+function activityActionLabel(action: string) {
+  return activityActionLabels[action] ?? action.replace(/^RECEPTION_/, '').toLocaleLowerCase('fr-FR').replaceAll('_', ' ');
+}
+
+function activityResultLabel(result: string) {
+  return ({ SUCCESS: 'Réussi', FAILURE: 'Échec', DENIED: 'Refusé' } as Record<string, string>)[result] ?? result;
+}
+
 export default function SuperAdminWorkspace({ name, audience = 'platform', showAgentCreation = false }: { name: string; audience?: Audience; showAgentCreation?: boolean }) {
   const router = useRouter();
   const isOwnerWorkspace = audience === 'owner';
   const isHotelAdminWorkspace = audience === 'hotel-admin';
   const { theme, toggleTheme } = useDashboardTheme();
-  const [section, setSection] = useState<Section>(isHotelAdminWorkspace ? 'my-rooms' : 'operations');
+  const [section, setSection] = useState<Section>(isHotelAdminWorkspace ? 'my-rooms' : 'overview');
   const [mobileMenu, setMobileMenu] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -115,32 +159,40 @@ export default function SuperAdminWorkspace({ name, audience = 'platform', showA
   const [auditPage, setAuditPage] = useState(1);
   const [resetLink, setResetLink] = useState<{ url: string; email: string; expiresAt: string } | null>(null);
   const [search, setSearch] = useState('');
+  const [userRoleFilter, setUserRoleFilter] = useState('');
+  const [userStatusFilter, setUserStatusFilter] = useState('');
   const [supportEmail, setSupportEmail] = useState('');
-  const [hotelSettings, setHotelSettings] = useState<HotelSettings>({ name: 'BLISS HOTEL', currency: 'XAF', timezone: 'Africa/Brazzaville', checkInTime: null, checkOutTime: '12:00', allowCheckoutWithBalance: false });
+  const [hotelSettings, setHotelSettings] = useState<HotelSettings>({ name: 'BLISS HOTEL', currency: 'XAF', usdRate: null, timezone: 'Africa/Brazzaville', checkInTime: null, checkOutTime: '12:00', allowCheckoutWithBalance: false });
   const [auditFilters, setAuditFilters] = useState({ actorId: '', action: '', result: '', from: '', to: '' });
 
   const selectedRoleData = useMemo(() => roles.find((role) => role.id === selectedRole) ?? roles[0], [roles, selectedRole]);
 
   const loadOverview = useCallback(async () => setOverview(await api<Overview>('/api/super-admin/overview')), []);
+  const [activeSessions, setActiveSessions] = useState<{ id: string; createdAt: string; expiresAt: string; user: { id: string; name: string; email: string; platformAdmin: boolean; lastLoginAt: string | null; role: { name: string; code: string } | null } }[]>([]);
+  const loadSessions = useCallback(async () => setActiveSessions((await api<{ sessions: typeof activeSessions }>('/api/super-admin/sessions')).sessions), []);
   const loadUsers = useCallback(async (query = '') => {
-    const data = await api<{ users: User[] }>(`/api/super-admin/users${query ? `?q=${encodeURIComponent(query)}` : ''}`);
+    const params = new URLSearchParams();
+    if (query) params.set('q', query);
+    if (userRoleFilter) params.set('role', userRoleFilter);
+    if (userStatusFilter) params.set('status', userStatusFilter);
+    const data = await api<{ users: User[] }>(`/api/super-admin/users?${params}`);
     setUsers(data.users);
-  }, []);
+  }, [userRoleFilter, userStatusFilter]);
   const loadRoles = useCallback(async () => {
-    const [data, featureData] = await Promise.all([
-      api<{ roles: Role[]; permissions: Permission[] }>('/api/super-admin/roles'),
-      api<{ features: PlatformFeature[] }>('/api/super-admin/features'),
-    ]);
+    const data = await api<{ roles: Role[]; permissions: Permission[] }>('/api/super-admin/roles');
     setRoles(data.roles);
     setPermissions(data.permissions);
-    setFeatures(featureData.features);
     setSelectedRole((current) => current || data.roles[0]?.id || '');
   }, []);
   const loadSettings = useCallback(async () => {
-    const data = await api<{ settings: { support_email: string; hotel: HotelSettings }; system?: { version: string; environment: string; emailProvider: string; database: string } }>('/api/super-admin/settings');
+    const [data, featureData] = await Promise.all([
+      api<{ settings: { support_email: string; hotel: HotelSettings }; system?: { version: string; environment: string; emailProvider: string; database: string } }>('/api/super-admin/settings'),
+      api<{ features: PlatformFeature[] }>('/api/super-admin/features'),
+    ]);
     setSettings(data);
     setSupportEmail(data.settings.support_email);
     setHotelSettings(data.settings.hotel);
+    setFeatures(featureData.features);
   }, []);
   const loadAudit = useCallback(async (
     filters = { actorId: '', action: '', result: '', from: '', to: '' },
@@ -163,9 +215,10 @@ export default function SuperAdminWorkspace({ name, audience = 'platform', showA
     setError('');
     setBusy(true);
     try {
-      if (currentSection === 'users') await Promise.all([loadUsers(), loadRoles()]);
-      if (currentSection === 'overview' || currentSection === 'diagnostics') await loadOverview();
-      if (currentSection === 'inventory') await loadInventory();
+      if (currentSection === 'users') await Promise.all([loadUsers(search), loadRoles()]);
+      if (currentSection === 'security' && !isOwnerWorkspace) await Promise.all([loadOverview(), loadSessions()]);
+      if ((currentSection === 'overview' || currentSection === 'diagnostics') && !isOwnerWorkspace) await loadOverview();
+      if (currentSection === 'inventory') await Promise.all([loadInventory(), loadSettings()]);
       if (currentSection === 'roles') await loadRoles();
       if (currentSection === 'settings') await loadSettings();
       if (currentSection === 'audit') await loadAudit();
@@ -175,12 +228,12 @@ export default function SuperAdminWorkspace({ name, audience = 'platform', showA
     } finally {
       setBusy(false);
     }
-  }, [loadOverview, loadUsers, loadRoles, loadSettings, loadAudit, loadReceptionCancellations, loadInventory]);
+  }, [loadOverview, loadUsers, loadRoles, loadSettings, loadAudit, loadReceptionCancellations, loadInventory, loadSessions, search, isOwnerWorkspace]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void loadSection(isHotelAdminWorkspace ? 'my-rooms' : 'overview'); }, 0);
     return () => window.clearTimeout(timer);
-  }, [isHotelAdminWorkspace, loadSection]);
+  }, [isHotelAdminWorkspace, isOwnerWorkspace, loadSection]);
 
   async function runAction(action: () => Promise<void>, success?: string) {
     setBusy(true);
@@ -269,6 +322,7 @@ export default function SuperAdminWorkspace({ name, audience = 'platform', showA
     await runAction(async () => {
       await api(`/api/super-admin/roles/${selectedRoleData.id}`, {
         method: 'PATCH',
+        headers: { 'X-Platform-Admin-Action': 'true' },
         body: JSON.stringify({ permissionCodes: selectedRoleData.permissions }),
       });
       await loadRoles();
@@ -282,16 +336,24 @@ export default function SuperAdminWorkspace({ name, audience = 'platform', showA
     await runAction(async () => {
       await api('/api/super-admin/features', {
         method: 'PATCH',
+        headers: { 'X-Platform-Admin-Action': 'true' },
         body: JSON.stringify({ key: feature.key, enabled }),
       });
-      await loadRoles();
+      await loadSettings();
     }, `Fonctionnalité ${enabled ? 'activée' : 'désactivée'} et action auditée.`);
   }
 
   async function saveSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await runAction(async () => {
-      await api('/api/super-admin/settings', { method: 'PATCH', body: JSON.stringify({ supportEmail, ...hotelSettings }) });
+      await api('/api/super-admin/settings', { method: 'PATCH', headers: { 'X-Platform-Admin-Action': 'true' }, body: JSON.stringify({
+        supportEmail,
+        currency: hotelSettings.currency,
+        timezone: hotelSettings.timezone,
+        checkInTime: hotelSettings.checkInTime,
+        checkOutTime: hotelSettings.checkOutTime,
+        allowCheckoutWithBalance: hotelSettings.allowCheckoutWithBalance,
+      }) });
       await loadSettings();
     }, 'Configuration de BLISS HOTEL mise à jour.');
   }
@@ -315,17 +377,25 @@ export default function SuperAdminWorkspace({ name, audience = 'platform', showA
     void loadSection(next);
   }
 
-  const visibleMenu = menu.filter((item) => isHotelAdminWorkspace ? ['my-rooms', 'shift-reports'].includes(item.id) : item.id !== 'my-rooms' && (!isOwnerWorkspace || item.id !== 'diagnostics'));
+  function openUserProfile(user: User) {
+    void runAction(async () => {
+      const result = await api<{ redirectTo: string }>('/api/god-mode/assume', { method: 'POST', body: JSON.stringify({ userId: user.id }) });
+      window.location.assign(result.redirectTo);
+    });
+  }
+
+  const visibleMenu = menu.filter((item) => isHotelAdminWorkspace
+    ? ['my-rooms', 'shift-reports'].includes(item.id)
+    : item.id !== 'my-rooms' && (item.id !== 'clients' || isOwnerWorkspace || audience === 'platform') && (!isOwnerWorkspace || !['operations', 'diagnostics', 'security'].includes(item.id)));
   const title = visibleMenu.find((item) => item.id === section)?.label ?? (isOwnerWorkspace || isHotelAdminWorkspace ? 'Administration hôtel' : 'Administration plateforme');
 
   return (
     <div className="sa-shell" data-theme={theme}>
-      <ProfileLauncher name={name} canEditName={!isHotelAdminWorkspace} />
       {mobileMenu && <button className="sa-backdrop" onClick={() => setMobileMenu(false)} aria-label="Fermer la navigation" />}
       <aside className={`sa-sidebar${mobileMenu ? ' is-open' : ''}`}>
         <div className="sa-brand">
           <span className="sa-brand-mark"><Building2 size={19} /></span>
-          <span><strong>BLISS HÔTEL</strong><small>{isOwnerWorkspace ? 'Espace propriétaire' : isHotelAdminWorkspace ? 'Administration hôtel' : 'Administration système'}</small></span>
+          <span><strong>BLISS HÔTEL</strong><small>{isOwnerWorkspace ? 'Espace propriétaire' : isHotelAdminWorkspace ? 'Administration hôtel' : 'SUPER ADMIN · Plateforme'}</small></span>
           <button className="sa-icon-button sa-mobile-close" onClick={() => setMobileMenu(false)} aria-label="Fermer"><X size={18} /></button>
         </div>
         <nav className="sa-nav" aria-label="Administration de la plateforme">
@@ -334,7 +404,7 @@ export default function SuperAdminWorkspace({ name, audience = 'platform', showA
               <p>{group}</p>
               {visibleMenu.filter((item) => item.group === (isOwnerWorkspace && group === 'Hôtel' ? 'Plateforme' : group)).map(({ id, label, icon: Icon }) => (
                 <button key={id} className={`sa-nav-item${section === id ? ' is-active' : ''}`} onClick={() => navigate(id)}>
-                  <Icon size={17} strokeWidth={1.8} /><span>{label}</span>
+                  <Icon size={17} strokeWidth={1.8} /><span>{isOwnerWorkspace && id === 'operations' ? 'Vue propriétaire' : label}</span>
                 </button>
               ))}
             </div>
@@ -342,6 +412,7 @@ export default function SuperAdminWorkspace({ name, audience = 'platform', showA
         </nav>
         <div className="sa-sidebar-foot">
           <div className="sa-profile"><span className="sa-avatar">{name.slice(0, 1).toUpperCase()}</span><span><strong>{name}</strong><small>{isOwnerWorkspace ? 'Propriétaire' : isHotelAdminWorkspace ? 'Administrateur Hôtel' : 'Super Administrateur'}</small></span></div>
+          <ProfileLauncher name={name} canEditName={!isHotelAdminWorkspace} className="sa-profile-launcher" />
           <button className="sa-logout" onClick={logout}><LogOut size={16} />Déconnexion</button>
         </div>
       </aside>
@@ -350,12 +421,12 @@ export default function SuperAdminWorkspace({ name, audience = 'platform', showA
         <header className="sa-topbar">
           <button className="sa-icon-button sa-menu-toggle" onClick={() => setMobileMenu(true)} aria-label="Ouvrir la navigation"><Menu size={19} /></button>
           <div className="sa-breadcrumb"><span>BLISS HÔTEL</span><i>/</i><strong>{title}</strong></div>
-          <div className="sa-top-actions"><span className="sa-role-chip"><Shield size={14} />{isOwnerWorkspace ? 'Propriétaire' : isHotelAdminWorkspace ? 'Administration hôtel' : 'Plateforme'}</span><DashboardThemeToggle theme={theme} onToggle={toggleTheme} />{!isOwnerWorkspace && !isHotelAdminWorkspace && <button className="sa-icon-button" onClick={() => navigate('diagnostics')} aria-label="État des services"><CircleHelp size={18} /></button>}</div>
+          <div className="sa-top-actions"><span className="sa-role-chip"><Shield size={14} />{isOwnerWorkspace ? 'Propriétaire' : isHotelAdminWorkspace ? 'Administration hôtel' : 'Plateforme'}</span><DashboardThemeToggle theme={theme} onToggle={toggleTheme} />{!isOwnerWorkspace && <button className="sa-button subtle sa-topbar-logout" onClick={() => void logout()} aria-label="Déconnexion" title="Déconnexion"><LogOut size={15} /><span>Déconnexion</span></button>}{!isOwnerWorkspace && !isHotelAdminWorkspace && <button className="sa-icon-button" onClick={() => navigate('diagnostics')} aria-label="État des services"><CircleHelp size={18} /></button>}</div>
         </header>
 
         <section className="sa-content">
           <div className="sa-page-heading">
-            <div><p className="sa-eyebrow">{isOwnerWorkspace || isHotelAdminWorkspace ? 'Gestion de l’hôtel' : 'Administration système'}</p><h1>{title}</h1><p className="sa-subtitle">{isHotelAdminWorkspace ? section === 'my-rooms' ? 'Suivi des chambres qui vous sont confiées dans BLISS HOTEL.' : 'Consultation des rapports de fin de service de la réception.' : section === 'operations' ? isOwnerWorkspace ? 'Cockpit stratégique du même inventaire et des opérations de BLISS HOTEL.' : 'Supervision globale des opérations, de l’occupation et des alertes de BLISS HOTEL.' : isOwnerWorkspace ? 'Gestion des utilisateurs, de l’inventaire, des affectations et des accès de BLISS HOTEL.' : 'Contrôle technique et configuration de BLISS HÔTEL.'}</p></div>
+            <div><p className="sa-eyebrow">{isOwnerWorkspace || isHotelAdminWorkspace ? 'Gestion de l’hôtel' : 'SUPER ADMIN · Contrôle global du logiciel'}</p><h1>{title}</h1><p className="sa-subtitle">{isHotelAdminWorkspace ? section === 'my-rooms' ? 'Suivi des chambres qui vous sont confiées dans BLISS HOTEL.' : 'Consultation des rapports de fin de service de la réception.' : isOwnerWorkspace && section === 'overview' ? 'Vue d’ensemble de l’activité et des indicateurs de BLISS HOTEL.' : section === 'operations' ? isOwnerWorkspace ? 'Cockpit stratégique du même inventaire et des opérations de BLISS HOTEL.' : 'Supervision globale des opérations, de l’occupation et des alertes de BLISS HOTEL.' : isOwnerWorkspace ? 'Gestion des utilisateurs, de l’inventaire, des affectations et des accès de BLISS HOTEL.' : 'Contrôle technique et configuration de BLISS HÔTEL.'}</p></div>
             {!isOwnerWorkspace && !isHotelAdminWorkspace && <span className="sa-environment"><i />{overview?.environment ?? '…'}</span>}
           </div>
           {error && <div className="sa-alert is-error" role="alert"><ShieldAlert size={17} />{error}</div>}
@@ -363,10 +434,12 @@ export default function SuperAdminWorkspace({ name, audience = 'platform', showA
           {busy && <div className="sa-loading" role="status" aria-live="polite"><span className="sa-spinner" aria-hidden="true" />Chargement en cours…</div>}
           {showAgentCreation && <AgentAccountForm />}
 
-          {section === 'overview' && <OverviewSection data={overview} navigate={navigate} isOwnerWorkspace={isOwnerWorkspace} />}
-          {section === 'operations' && <OperationsCenter name={name} roleCode={isOwnerWorkspace ? 'OWNER' : 'SUPER_ADMIN'} />}
-          {section === 'god-mode' && !isHotelAdminWorkspace && <GodModeProfileViewer />}
-          {section === 'users' && <UsersSection data={users} search={search} setSearch={setSearch} submit={(event) => { event.preventDefault(); void runAction(() => loadUsers(search)); }} change={changeUser} createReset={createResetLink} beginCreate={() => setShowNewUser(true)} beginEdit={(user) => beginUserEdit(user)} viewActivity={(user) => void viewStaffActivity(user)} isOwnerWorkspace={isOwnerWorkspace} />}
+          {section === 'overview' && (isOwnerWorkspace
+            ? <OwnerOverview name={name} theme={theme} />
+            : <><OverviewSection data={overview} navigate={navigate} isOwnerWorkspace={isOwnerWorkspace} />{audience === 'platform' && <OwnerOverview name={name} theme={theme} />}</>)}
+          {section === 'operations' && (isOwnerWorkspace || audience === 'platform' ? <OwnerOverview name={name} theme={theme} /> : <OperationsCenter name={name} roleCode="SUPER_ADMIN" />)}
+          {section === 'clients' && (isOwnerWorkspace || audience === 'platform') && <OwnerClientRecords />}
+          {section === 'users' && <UsersSection data={users} roles={roles} search={search} setSearch={setSearch} roleFilter={userRoleFilter} setRoleFilter={setUserRoleFilter} statusFilter={userStatusFilter} setStatusFilter={setUserStatusFilter} submit={(event) => { event.preventDefault(); void runAction(() => loadUsers(search)); }} change={changeUser} createReset={createResetLink} beginCreate={() => setShowNewUser(true)} beginEdit={(user) => beginUserEdit(user)} viewActivity={(user) => void viewStaffActivity(user)} viewProfile={openUserProfile} isOwnerWorkspace={isOwnerWorkspace} />}
           {section === 'inventory' && <InventorySection
             data={inventory}
             categoryForm={categoryForm}
@@ -382,8 +455,8 @@ export default function SuperAdminWorkspace({ name, audience = 'platform', showA
           {section === 'room-assignments' && !isHotelAdminWorkspace && <RoomAssignments />}
           {section === 'admin-permissions' && !isHotelAdminWorkspace && <HotelAdminPermissions />}
           {section === 'my-rooms' && isHotelAdminWorkspace && <MyRooms />}
-          {section === 'roles' && <RolesSection roles={roles} permissions={permissions} features={features} selected={selectedRoleData} select={setSelectedRole} toggle={(code) => setRoles((items) => items.map((role) => role.id === selectedRoleData?.id ? { ...role, permissions: role.permissions.includes(code) ? role.permissions.filter((item) => item !== code) : [...role.permissions, code] } : role))} save={savePermissions} changeFeature={changeFeature} />}
-          {section === 'settings' && <SettingsSection data={settings} supportEmail={supportEmail} setSupportEmail={setSupportEmail} hotel={hotelSettings} setHotel={setHotelSettings} save={saveSettings} />}
+          {section === 'roles' && <RolesSection roles={roles} permissions={permissions} selected={selectedRoleData} select={setSelectedRole} toggle={(code) => setRoles((items) => items.map((role) => role.id === selectedRoleData?.id ? { ...role, permissions: role.permissions.includes(code) ? role.permissions.filter((item) => item !== code) : [...role.permissions, code] } : role))} save={savePermissions} />}
+          {section === 'settings' && <SettingsSection data={settings} supportEmail={supportEmail} setSupportEmail={setSupportEmail} hotel={hotelSettings} setHotel={setHotelSettings} save={saveSettings} features={features} changeFeature={changeFeature} />}
           {section === 'audit' && <AuditSection events={audit} total={auditTotal} page={auditPage} setPage={setAuditPage} filters={auditFilters} setFilters={setAuditFilters} apply={() => { setAuditPage(1); void runAction(() => loadAudit(auditFilters, 1)); }} changePage={(page) => { setAuditPage(page); void runAction(() => loadAudit(auditFilters, page)); }} />}
           {section === 'shift-reports' && <ShiftReportsWorkspace />}
           {section === 'reception-cancellations' && <ReceptionCancellationsSection
@@ -393,12 +466,19 @@ export default function SuperAdminWorkspace({ name, audience = 'platform', showA
             changePage={(page) => void runAction(() => loadReceptionCancellations(page))}
           />}
           {section === 'diagnostics' && !isOwnerWorkspace && <DiagnosticsSection data={overview} />}
+          {section === 'security' && !isOwnerWorkspace && <SecuritySection overview={overview} sessions={activeSessions} revoke={async (user) => {
+            if (!window.confirm(`Révoquer toutes les sessions de ${user.name} ?`)) return;
+            await runAction(async () => {
+              const result = await api<{ sessionsRevoked: number }>('/api/super-admin/sessions', { method: 'DELETE', body: JSON.stringify({ userId: user.id }) });
+              await Promise.all([loadSessions(), loadOverview()]);
+              setNotice(`${result.sessionsRevoked} session(s) révoquée(s), opération journalisée.`);
+            });
+          }} />}
           {resetLink && <ResetLinkDialog data={resetLink} close={() => setResetLink(null)} />}
           {showNewUser && <NewUserDialog form={newUserForm} setForm={setNewUserForm} roles={roles.filter((role) => role.code !== 'SUPER_ADMIN' && (!isOwnerWorkspace || role.code !== 'OWNER'))} close={() => setShowNewUser(false)} submit={createUser} />}
           {editingUser && <EditUserDialog user={editingUser} form={editUserForm} setForm={setEditUserForm} roles={roles.filter((role) => role.code !== 'SUPER_ADMIN' && (!isOwnerWorkspace || role.code !== 'OWNER'))} close={() => setEditingUser(null)} submit={saveUserEdit} />}
           {staffActivity && activityUser && <StaffActivityDialog
             data={staffActivity}
-            currency={settings?.settings.hotel.currency ?? 'XAF'}
             range={activityPeriod}
             setRange={setActivityPeriod}
             apply={() => void viewStaffActivity(activityUser, activityPeriod)}
@@ -412,48 +492,65 @@ export default function SuperAdminWorkspace({ name, audience = 'platform', showA
 
 function OverviewSection({ data, navigate, isOwnerWorkspace }: { data: Overview | null; navigate: (section: Section) => void; isOwnerWorkspace: boolean }) {
   if (!data) return <EmptyState text="Les indicateurs plateforme sont indisponibles pour le moment." />;
-  const inactiveUsers = Math.max(0, data.counts.users - data.counts.activeUsers);
+  const inactiveUsers = data.counts.suspendedUsers;
+  const platformAdminCount = data.counts.platformAdmins;
   const cards = [
-    { label: 'Utilisateurs actifs', value: data.counts.activeUsers, icon: Users, link: 'users' as const },
-    { label: 'Comptes utilisateurs', value: data.counts.users, icon: Shield, link: 'users' as const },
-    { label: 'Chambres', value: data.counts.rooms, icon: Building2, link: isOwnerWorkspace ? 'inventory' as const : 'diagnostics' as const },
-    { label: 'Réservations', value: data.counts.reservations, icon: ClipboardList, link: 'audit' as const },
+    { label: 'Comptes utilisateurs', value: data.counts.users, icon: Users, link: 'users' as const },
+    { label: 'Comptes Super Administrateur', value: platformAdminCount, icon: Shield, link: 'users' as const },
+    { label: 'Comptes actifs', value: data.counts.activeUsers, icon: Activity, link: 'users' as const },
+    { label: 'Sessions actives', value: data.counts.activeSessions, icon: LockKeyhole, link: 'security' as const },
   ];
   return <>
     <div className="sa-metrics">{cards.map(({ label, value, icon: Icon, link }) => <button className="sa-metric" key={label} onClick={() => navigate(link)}><span className="sa-metric-icon"><Icon size={18} /></span><span className="sa-metric-label">{label}</span><strong>{value.toLocaleString('fr-FR')}</strong><small>Voir les détails <ChevronDown size={13} /></small></button>)}</div>
-    <div className="sa-cockpit-grid">
-      <article className="sa-panel sa-cockpit-panel"><div className="sa-panel-heading"><div><p>ACCÈS COLLABORATEURS</p><h2>Comptes actifs</h2></div><Users size={18} /></div><CockpitDonut total={data.counts.users} centerValue={data.counts.activeUsers.toLocaleString('fr-FR')} centerLabel="actifs" segments={[
-        { label: 'Actifs', value: data.counts.activeUsers, color: '#4e9d7b' },
-        { label: 'Suspendus', value: inactiveUsers, color: '#d97868' },
-      ]} onSelect={() => navigate('users')} /><p className="sa-cockpit-note">Comptes et accès du périmètre actuellement sélectionné.</p></article>
-      <article className="sa-panel sa-cockpit-panel"><div className="sa-panel-heading"><div><p>VOLUME DE GESTION</p><h2>Activité de l’établissement</h2></div><Activity size={18} /></div><CockpitBars rows={[
-        { label: 'Comptes', value: data.counts.users, color: '#5896d0' },
-        { label: 'Chambres', value: data.counts.rooms, color: '#4e9d7b' },
-        { label: 'Réservations', value: data.counts.reservations, color: '#c6a878' },
-      ]} /><p className="sa-cockpit-note">Indicateurs cumulés disponibles pour ce périmètre de gestion.</p></article>
-    </div>
+    {!isOwnerWorkspace && <div className="sa-panel sa-table-panel"><div className="sa-panel-heading"><div><p>COMMISSIONS DE RÉCEPTION · 30 DERNIERS JOURS</p><h2>{new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'XAF', maximumFractionDigits: 0 }).format(Number(data.cashCommissions.total))} · {data.cashCommissions.count} retrait(s)</h2></div><CreditCard size={18} /></div>{data.cashCommissions.byReceptionist.length ? <div className="sa-table-wrap"><table className="sa-table"><thead><tr><th>Réceptionniste</th><th>Total retiré de caisse</th></tr></thead><tbody>{data.cashCommissions.byReceptionist.map((entry) => <tr key={entry.receptionist}><td>{entry.receptionist}</td><td><strong>{new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'XAF', maximumFractionDigits: 0 }).format(Number(entry.amount))}</strong></td></tr>)}</tbody></table></div> : <EmptyState text="Aucun retrait de commission sur les 30 derniers jours." />}<p className="sa-help">Chaque commission est déduite une seule fois par réservation et n’augmente pas la facture du client.</p></div>}
+    {!isOwnerWorkspace && <div className="sa-overview-grid"><article className="sa-panel"><div className="sa-panel-heading"><div><p>COMPTES PAR RÔLE</p><h2>Accès utilisateurs</h2></div><Users size={18} /></div>{[['Propriétaires', data.counts.owners], ['Administrateurs hôtel', data.counts.hotelAdmins], ['Gérants', data.counts.managers], ['Réceptionnistes', data.counts.receptionists], ['Autres employés', data.counts.otherStaff]].map(([label, value]) => <ServiceLine key={label} label={label as string} status={String(value)} />)}<p className="sa-cockpit-note">{data.counts.newUsersThisWeek} nouveau(x) compte(s) cette semaine · {inactiveUsers} compte(s) suspendu(s)</p></article><article className="sa-panel"><div className="sa-panel-heading"><div><p>SANTÉ & SÉCURITÉ</p><h2>État du logiciel</h2></div><Activity size={18} /></div><ServiceLine label="Backend API" status="Opérationnel · données servies" /><ServiceLine label="Interface frontend" status="Build disponible · disponibilité externe non mesurée" /><ServiceLine label="Base MariaDB" status={data.services.database === 'available' ? 'Connectée' : 'Indisponible'} warning={data.services.database !== 'available'} /><ServiceLine label="Échecs d’authentification / 24 h" status={String(data.security.failedLogins24h)} warning={data.security.failedLogins24h > 0} /><ServiceLine label="Sauvegardes" status="Non configurées" warning /><ServiceLine label="Tâches planifiées / MFA" status="Non configurées" /></article></div>}
+    {!isOwnerWorkspace && <div className="sa-panel sa-table-panel"><div className="sa-panel-heading"><div><p>CONNEXIONS</p><h2>Dernières connexions</h2></div><button className="sa-button" onClick={() => navigate('security')}>Sécurité & sessions</button></div>{data.recentLogins.length ? <div className="sa-table-wrap"><table className="sa-table"><thead><tr><th>Utilisateur</th><th>Rôle</th><th>Dernière connexion</th><th>Statut</th></tr></thead><tbody>{data.recentLogins.map((user) => <tr key={user.id}><td><b>{user.name}</b><small>{user.email}</small></td><td>{user.role?.name ?? 'Sans rôle'}</td><td>{formatDate(user.lastLoginAt)}</td><td><Status active={true} label="Compte actif" /></td></tr>)}</tbody></table></div> : <EmptyState text="Aucune connexion enregistrée." />}</div>}
+    {!isOwnerWorkspace && <div className="sa-panel"><div className="sa-panel-heading"><div><p>OPÉRATIONS SENSIBLES · DERNIÈRES 24 H</p><h2>Activité administrative</h2></div><ClipboardList size={18} /></div>{data.security.sensitiveEvents.length ? data.security.sensitiveEvents.map((event) => <ServiceLine key={event.id} label={`${event.actor} · ${event.action.replaceAll('_', ' ')}`} status={`${formatDate(event.createdAt)} · ${event.result}${event.targetId ? ` · ${event.targetId}` : ''}`} />) : <EmptyState text="Aucune opération administrative sensible récente." />}</div>}
     <div className="sa-overview-grid">
-      {!isOwnerWorkspace && data.services && <article className="sa-panel"><div className="sa-panel-heading"><div><p>Services</p><h2>État de la plateforme</h2></div><Activity size={18} /></div><ServiceLine label="Base de données MariaDB" status={data.services.database} /><ServiceLine label="Fournisseur e-mail" status={data.services.email} /><ServiceLine label="Échecs enregistrés (24 h)" status={data.services.recentFailures ? `${data.services.recentFailures} échec(s)` : 'aucun'} warning={data.services.recentFailures > 0} /></article>}
-      <article className="sa-panel"><div className="sa-panel-heading"><div><p>Accès rapides</p><h2>Administration</h2></div><Shield size={18} /></div><div className="sa-shortcuts"><button onClick={() => navigate('users')}><Users size={17} /><span>Rechercher un utilisateur</span></button><button onClick={() => navigate('roles')}><Shield size={17} /><span>Gérer les rôles et permissions</span></button><button onClick={() => navigate('audit')}><ClipboardList size={17} /><span>Consulter le journal d’audit</span></button>{!isOwnerWorkspace && <button onClick={() => navigate('diagnostics')}><Activity size={17} /><span>Consulter les diagnostics</span></button>}</div></article>
+      <article className="sa-panel"><div className="sa-panel-heading"><div><p>ACCÈS RAPIDES</p><h2>Administration plateforme</h2></div><Shield size={18} /></div><div className="sa-shortcuts"><button onClick={() => navigate('users')}><Users size={17} /><span>Rechercher un utilisateur</span></button><button onClick={() => navigate('roles')}><Shield size={17} /><span>Gérer les rôles et permissions</span></button><button onClick={() => navigate('security')}><LockKeyhole size={17} /><span>Gérer les sessions et alertes sécurité</span></button><button onClick={() => navigate('audit')}><ClipboardList size={17} /><span>Consulter le journal d’audit</span></button><button onClick={() => navigate('diagnostics')}><Activity size={17} /><span>Consulter les diagnostics</span></button></div></article>
     </div>
   </>;
 }
 
 
-function RolesSection({ roles, permissions, features, selected, select, toggle, save, changeFeature }: { roles: Role[]; permissions: Permission[]; features: PlatformFeature[]; selected?: Role; select: (id: string) => void; toggle: (code: string) => void; save: () => void; changeFeature: (feature: PlatformFeature) => void }) {
+const permissionGroupLabels: Record<string, string> = {
+  FOUNDATION: 'Accès de base', RESERVATIONS: 'Réservations et clients', FRONT_DESK: 'Réception et séjours',
+  CASHIER_OPERATIONS: 'Caisse et paiements', SHIFT_REPORTS: 'Rapports de service', ACCOUNTING: 'Comptabilité et rapports',
+  SENSITIVE: 'Opérations sensibles', ROOMS: 'Chambres', HOUSEKEEPING: 'Entretien et ménage',
+  RESTAURANT: 'Restaurant', MAINTENANCE: 'Maintenance', PLATFORM: 'Plateforme',
+};
+const permissionLabels: Record<string, string> = {
+  'dashboard.view': 'Consulter le tableau de bord', 'users.view': 'Consulter les utilisateurs', 'users.manage': 'Gérer les utilisateurs',
+  'roles.view': 'Consulter les rôles', 'roles.assign': 'Attribuer des rôles', 'permissions.manage': 'Gérer les permissions', 'audit.view': 'Consulter le journal d’audit',
+  'reservations.view': 'Consulter les réservations', 'reservations.create': 'Créer des réservations', 'reservations.update': 'Modifier les réservations', 'reservations.cancel': 'Annuler les réservations', 'reservations.confirm': 'Confirmer les réservations',
+  'clients.view': 'Consulter les clients', 'clients.create': 'Créer des fiches client', 'clients.update': 'Modifier les fiches client',
+  'stays.view': 'Consulter les séjours', 'stays.checkin': 'Enregistrer les arrivées', 'stays.checkout': 'Enregistrer les départs', 'stays.extend': 'Prolonger les séjours',
+  'folios.view': 'Consulter les folios', 'folios.manage': 'Gérer les folios', 'invoices.view': 'Consulter les factures', 'invoices.create': 'Créer des factures',
+  'payments.view': 'Consulter les paiements', 'payments.collect': 'Enregistrer les encaissements', 'payments.refund': 'Rembourser les paiements', 'payments.reverse': 'Annuler les paiements',
+  'cash_sessions.open_own': 'Ouvrir sa session de caisse', 'cash_sessions.view_own': 'Consulter sa session de caisse', 'cash_sessions.close_own': 'Clôturer sa session de caisse', 'cash_sessions.view_all': 'Consulter toutes les sessions de caisse', 'cash_sessions.reopen': 'Rouvrir une session de caisse',
+  'shift_reports.view': 'Consulter les rapports de service', 'accounting.view': 'Consulter la comptabilité', 'expenses.manage': 'Gérer les dépenses', 'reconciliation.manage': 'Gérer les rapprochements', 'reports.financial.view': 'Consulter les rapports financiers', 'reports.export': 'Exporter les rapports',
+  'invoices.correct': 'Corriger les factures', 'approvals.view': 'Consulter les validations', 'approvals.decide': 'Décider des validations', 'stays.checkin.correct': 'Corriger les arrivées',
+  'rooms.view': 'Consulter les chambres', 'rooms.manage': 'Gérer les chambres', 'rooms.block': 'Bloquer les chambres', 'rooms.release': 'Remettre les chambres en service', 'rooms.rates.view': 'Consulter les tarifs des chambres',
+  'housekeeping.tasks.view': 'Consulter les tâches de ménage', 'housekeeping.tasks.assign': 'Attribuer les tâches de ménage', 'housekeeping.tasks.execute': 'Effectuer les tâches de ménage', 'housekeeping.rooms.inspect': 'Inspecter les chambres', 'housekeeping.agents.manage': 'Gérer les agents d’entretien',
+  'restaurant.menu.manage': 'Gérer la carte, les produits et les prix', 'restaurant.orders.manage': 'Gérer les commandes du restaurant', 'restaurant.folio.transfer': 'Transférer les commandes vers un folio', 'restaurant.stock.view': 'Voir le stock du restaurant', 'restaurant.stock.count': 'Faire l’inventaire physique du stock', 'restaurant.stock.manage': 'Gérer les mouvements et les réglages de stock', 'restaurant.reports.view': 'Consulter les rapports du restaurant',
+  'maintenance.view': 'Consulter la maintenance', 'maintenance.incidents.report': 'Signaler des incidents', 'maintenance.tickets.manage': 'Gérer les interventions', 'maintenance.rooms.block': 'Mettre les chambres en maintenance', 'maintenance.rooms.release': 'Libérer les chambres en maintenance', 'platform.manage': 'Gérer la plateforme',
+};
+
+function RolesSection({ roles, permissions, selected, select, toggle, save }: { roles: Role[]; permissions: Permission[]; selected?: Role; select: (id: string) => void; toggle: (code: string) => void; save: () => void }) {
   const grouped = useMemo(() => permissions.reduce<Record<string, Permission[]>>((groups, permission) => { (groups[permission.group] ??= []).push(permission); return groups; }, {}), [permissions]);
   return <>
-    <div className="sa-role-layout"><aside className="sa-panel sa-role-list"><p>Rôles BLISS HÔTEL</p>{roles.map((role) => <button className={selected?.id === role.id ? 'is-selected' : ''} key={role.id} onClick={() => select(role.id)}><span>{role.name}{role.optional && <small>Facultatif</small>}</span><b>{role._count.users}</b></button>)}</aside><section className="sa-panel sa-permission-panel"><div className="sa-panel-heading"><div><p>Contrôle d’accès</p><h2>{selected?.name ?? 'Sélectionner un rôle'}</h2></div>{(selected?.code === 'SUPER_ADMIN' || selected?.code === 'HOTEL_ADMIN') && <span className="sa-tag">Protégé</span>}</div>{selected?.code === 'SUPER_ADMIN' ? <div className="sa-info-box">Le compte Super Administrateur conserve le contrôle technique et n’est pas un rôle hôtelier.</div> : selected?.code === 'HOTEL_ADMIN' ? <div className="sa-info-box">Ce rôle conserve uniquement l’accès de base au tableau de bord et aux chambres. Configurez chaque compte dans « Permissions individuelles ».</div> : selected ? <>{Object.entries(grouped).map(([group, items]) => <div className="sa-permission-group" key={group}><h3>{group.replaceAll('_', ' ')}</h3>{items.map((permission) => <label key={permission.code}><input type="checkbox" checked={selected.permissions.includes(permission.code)} onChange={() => toggle(permission.code)} /><span><strong>{permission.code}</strong></span></label>)}</div>)}<button className="sa-button primary" onClick={save}>Enregistrer les permissions</button></> : <EmptyState text="Aucun rôle disponible. Lancez le seed RBAC." />}</section></div>
-    <section className="sa-panel sa-feature-panel"><div className="sa-panel-heading"><div><p>Modules de BLISS HÔTEL</p><h2>Fonctionnalités activables</h2></div><Settings2 size={18} /></div><p className="sa-feature-note">Un module désactivé bloque immédiatement les permissions de son groupe pour BLISS HÔTEL. Les permissions attribuées sont conservées et redeviennent actives à la réactivation.</p><div className="sa-feature-list">{features.map((feature) => <label className="sa-feature-toggle" key={feature.key}><span><strong>{feature.name}</strong><small>{feature.description}</small></span><input type="checkbox" checked={feature.enabled} onChange={() => changeFeature(feature)} aria-label={`${feature.enabled ? 'Désactiver' : 'Activer'} ${feature.name} pour BLISS HÔTEL`} /></label>)}</div></section>
+    <div className="sa-role-layout"><aside className="sa-panel sa-role-list"><p>Rôles BLISS HÔTEL</p>{roles.map((role) => <button className={selected?.id === role.id ? 'is-selected' : ''} key={role.id} onClick={() => select(role.id)}><span>{role.name}{role.optional && <small>Facultatif</small>}</span><b>{role._count.users}</b></button>)}</aside><section className="sa-panel sa-permission-panel"><div className="sa-panel-heading"><div><p>Contrôle d’accès</p><h2>{selected?.name ?? 'Sélectionner un rôle'}</h2></div>{(selected?.code === 'SUPER_ADMIN' || selected?.code === 'HOTEL_ADMIN') && <span className="sa-tag">Protégé</span>}</div>{selected?.code === 'SUPER_ADMIN' ? <div className="sa-info-box">Le compte Super Administrateur conserve le contrôle technique et n’est pas un rôle hôtelier.</div> : selected?.code === 'HOTEL_ADMIN' ? <div className="sa-info-box">Ce rôle conserve uniquement l’accès de base au tableau de bord et aux chambres. Configurez chaque compte dans « Permissions individuelles ».</div> : selected ? <>{Object.entries(grouped).map(([group, items]) => <div className="sa-permission-group" key={group}><h3>{permissionGroupLabels[group] ?? group.replaceAll('_', ' ')}</h3>{items.map((permission) => <label key={permission.code}><input type="checkbox" checked={selected.permissions.includes(permission.code)} onChange={() => toggle(permission.code)} /><span><strong>{permissionLabels[permission.code] ?? permission.code}</strong></span></label>)}</div>)}<button className="sa-button primary" onClick={save}>Enregistrer les permissions</button></> : <EmptyState text="Aucun rôle disponible. Lancez le seed RBAC." />}</section></div>
   </>;
 }
 
-function SettingsSection({ data, supportEmail, setSupportEmail, hotel, setHotel, save }: { data: { settings: { support_email: string; hotel: HotelSettings }; system?: { version: string; environment: string; emailProvider: string; database: string } } | null; supportEmail: string; setSupportEmail: (value: string) => void; hotel: HotelSettings; setHotel: (value: HotelSettings) => void; save: (event: FormEvent<HTMLFormElement>) => void }) {
+function SettingsSection({ data, supportEmail, setSupportEmail, hotel, setHotel, save, features, changeFeature }: { data: { settings: { support_email: string; hotel: HotelSettings }; system?: { version: string; environment: string; emailProvider: string; database: string } } | null; supportEmail: string; setSupportEmail: (value: string) => void; hotel: HotelSettings; setHotel: (value: HotelSettings) => void; save: (event: FormEvent<HTMLFormElement>) => void; features: PlatformFeature[]; changeFeature: (feature: PlatformFeature) => void }) {
   return <div className="sa-settings-grid">
     <form className="sa-panel sa-settings-form" onSubmit={save}>
       <div className="sa-panel-heading"><div><p>Configuration unique</p><h2>BLISS HOTEL</h2></div><Building2 size={18} /></div>
       <label><span>Nom de l’établissement</span><input value={hotel.name} readOnly /></label>
-      <label><span>Devise de l’hôtel</span><input value="Franc CFA (XAF)" readOnly /><small>Les soldes, tarifs, paiements et rapports sont exprimés en FCFA.</small></label>
+      <label><span>Devise de saisie par défaut</span><select value={hotel.currency} onChange={(event) => { const currency = hotelCurrencies.find((item) => item === event.target.value); if (currency) setHotel({ ...hotel, currency }); }}>{hotelCurrencies.map((currency) => <option key={currency} value={currency}>{hotelCurrencyLabels[currency]}</option>)}</select><small>Les montants saisis dans cette devise sont convertis en XAF. Les montants comptables existants restent en XAF.</small></label>
+      {hotel.currency === 'EUR' && <p className="sa-help">Taux fixe : 1 EUR = 655,957 XAF.</p>}
+      {hotel.currency === 'USD' && <p className="sa-help">{hotel.usdRate ? `Dernier taux USD/XAF : ${hotel.usdRate.xafPerUnit} · mis à jour le ${formatDate(hotel.usdRate.effectiveAt)} (${hotel.usdRate.source}).` : 'Le taux USD/XAF sera téléchargé automatiquement à la première saisie. Les saisies sont bloquées si aucun taux récent n’est disponible.'}</p>}
       <label><span>Fuseau horaire</span><input value={hotel.timezone} onChange={(event) => setHotel({ ...hotel, timezone: event.target.value })} maxLength={64} required /></label>
       <label><span>Heure indicative d’arrivée</span><input type="time" value={hotel.checkInTime ?? ''} onChange={(event) => setHotel({ ...hotel, checkInTime: event.target.value || null })} /><small>Le client peut arriver à l’heure convenue avec la réception.</small></label>
       <label><span>Heure conventionnelle de départ</span><input type="time" value={hotel.checkOutTime ?? ''} onChange={(event) => setHotel({ ...hotel, checkOutTime: event.target.value || null })} /></label>
@@ -462,7 +559,8 @@ function SettingsSection({ data, supportEmail, setSupportEmail, hotel, setHotel,
       <button className="sa-button primary">Enregistrer</button>
       <p className="sa-help">Le nom BLISS HOTEL est fixe. La récupération automatique n’est pas activée sans fournisseur de messagerie.</p>
     </form>
-    <div className="sa-panel"><div className="sa-panel-heading"><div><p>Informations non sensibles</p><h2>Configuration système</h2></div><Settings2 size={18} /></div>{data?.system ? <><ServiceLine label="Version" status={data.system.version} /><ServiceLine label="Environnement" status={data.system.environment} /><ServiceLine label="Fournisseur e-mail" status={data.system.emailProvider} /><ServiceLine label="Base de données" status={data.system.database} /></> : <EmptyState text={data ? 'Les informations techniques sont réservées au Super Administrateur.' : 'Configuration indisponible.'} />}</div>
+    <section className="sa-panel sa-feature-panel"><div className="sa-panel-heading"><div><p>Modules de BLISS HÔTEL</p><h2>Fonctionnalités activables</h2></div><Settings2 size={18} /></div><p className="sa-feature-note">Un module désactivé bloque immédiatement les permissions de son groupe pour BLISS HÔTEL. Les permissions attribuées sont conservées et redeviennent actives à la réactivation.</p><div className="sa-feature-list">{features.map((feature) => <label className="sa-feature-toggle" key={feature.key}><span><strong>{feature.name}</strong><small>{feature.description}</small></span><input type="checkbox" checked={feature.enabled} onChange={() => changeFeature(feature)} aria-label={`${feature.enabled ? 'Désactiver' : 'Activer'} ${feature.name} pour BLISS HÔTEL`} /></label>)}</div></section>
+    <div className="sa-panel"><div className="sa-panel-heading"><div><p>Informations non sensibles</p><h2>Configuration système</h2></div><Settings2 size={18} /></div>{data?.system ? <><ServiceLine label="Version" status={data.system.version} /><ServiceLine label="Environnement" status={data.system.environment} /><ServiceLine label="Fournisseur e-mail" status={data.system.emailProvider} /><ServiceLine label="Base de données" status={data.system.database} /></> : <EmptyState text="Configuration indisponible." />}</div>
   </div>;
 }
 
@@ -505,21 +603,40 @@ function ReceptionCancellationsSection({ events, total, page, changePage }: {
   </div>;
 }
 
-function DiagnosticsSection({ data }: { data: Overview | null }) {
-  if (!data?.services) return <EmptyState text="Diagnostic indisponible." />;
-  return <div className="sa-diagnostics-grid"><article className="sa-panel"><div className="sa-panel-heading"><div><p>Diagnostic</p><h2>État des services</h2></div><Activity size={18} /></div><ServiceLine label="MariaDB / Prisma" status={data.services.database} /><ServiceLine label="Messagerie de récupération" status={data.services.email} /><ServiceLine label="Échecs enregistrés sur 24 h" status={data.services.recentFailures ? String(data.services.recentFailures) : 'aucun'} warning={data.services.recentFailures > 0} /><ServiceLine label="Environnement" status={data.environment ?? 'unknown'} /><ServiceLine label="Version" status={data.version ?? '0.1.0'} /></article><article className="sa-panel"><div className="sa-panel-heading"><div><p>Événements</p><h2>Erreurs récentes (24 h)</h2></div><Activity size={18} /></div>{data.services.recentFailureEvents.length ? <ul className="sa-failure-list">{data.services.recentFailureEvents.map((event) => <li key={event.id}><strong>{event.action === 'AUTH_LOGIN' ? 'Échec de connexion' : event.action}</strong><time>{formatDate(event.createdAt)}</time></li>)}</ul> : <EmptyState text="Aucun échec enregistré sur les dernières 24 heures." />}</article><article className="sa-panel"><div className="sa-panel-heading"><div><p>Confidentialité</p><h2>Diagnostic sans secrets</h2></div><LockKeyhole size={18} /></div><p className="sa-diagnostic-copy">Cette vue n’affiche que les événements d’échec et leur type. Les mots de passe, jetons, adresses IP et données personnelles inutiles restent masqués.</p><div className="sa-info-box"><Database size={16} />Le détail d’un changement métier se consulte dans le journal d’audit.</div></article></div>;
+function SecuritySection({ overview, sessions, revoke }: {
+  overview: Overview | null;
+  sessions: { id: string; createdAt: string; expiresAt: string; user: { id: string; name: string; email: string; platformAdmin: boolean; lastLoginAt: string | null; role: { name: string; code: string } | null } }[];
+  revoke: (user: { id: string; name: string }) => void;
+}) {
+  return <div className="sa-diagnostics-grid">
+    <article className="sa-panel"><div className="sa-panel-heading"><div><p>AUTHENTIFICATION · 24 H</p><h2>Échecs et verrouillages</h2></div><LockKeyhole size={18} /></div><ServiceLine label="Tentatives échouées enregistrées" status={String(overview?.security.failedLogins24h ?? 0)} warning={(overview?.security.failedLogins24h ?? 0) > 0} /><ServiceLine label="Comptes sous limitation" status={String(overview?.security.lockedAccounts ?? 0)} warning={(overview?.security.lockedAccounts ?? 0) > 0} /><ServiceLine label="Tentatives (fenêtres actives)" status={String(overview?.security.rateLimitAttempts ?? 0)} /><ServiceLine label="MFA Super Admin" status="Non configurée" warning /></article>
+    <article className="sa-panel sa-table-panel"><div className="sa-panel-heading"><div><p>SESSIONS EN COURS</p><h2>{sessions.length} session(s) active(s) · 500 max affichées</h2></div></div>{sessions.length ? <div className="sa-table-wrap"><table className="sa-table"><thead><tr><th>Compte</th><th>Rôle</th><th>Session créée</th><th>Expiration</th><th>Action</th></tr></thead><tbody>{sessions.map((session) => <tr key={session.id}><td><b>{session.user.name}</b><small>{session.user.email}</small></td><td>{session.user.role?.name ?? (session.user.platformAdmin ? 'Super Administrateur' : 'Sans rôle')}</td><td>{formatDate(session.createdAt)}</td><td>{formatDate(session.expiresAt)}</td><td><button className="sa-button subtle" disabled={session.user.platformAdmin} onClick={() => revoke(session.user)}>{session.user.platformAdmin ? 'Compte protégé' : 'Révoquer toutes'}</button></td></tr>)}</tbody></table></div> : <EmptyState text="Aucune session active." />}</article>
+    <article className="sa-panel sa-table-panel"><div className="sa-panel-heading"><div><p>AUTHENTIFICATIONS ÉCHOUÉES</p><h2>Événements enregistrés</h2></div></div>{overview?.security.recentFailures.length ? <div className="sa-table-wrap"><table className="sa-table"><thead><tr><th>Date</th><th>Compte saisi</th><th>Résultat</th></tr></thead><tbody>{overview.security.recentFailures.map((event) => <tr key={event.id}><td>{formatDate(event.createdAt)}</td><td>{event.email ?? 'Non enregistré'}</td><td>{event.result}</td></tr>)}</tbody></table></div> : <EmptyState text="Aucun échec de connexion sur les dernières 24 heures." />}</article>
+    <article className="sa-panel"><div className="sa-panel-heading"><div><p>INFRASTRUCTURE</p><h2>Capacités non configurées</h2></div><Database size={18} /></div><ServiceLine label="Sauvegardes / restauration" status="Non configurées · aucune sauvegarde inventoriée" warning /><ServiceLine label="Stockage disponible" status="Métrique non exposée par l’hébergement" /><ServiceLine label="Monitoring serveur / erreurs HTTP" status="Non configuré · seuls les échecs d’authentification audit sont suivis" /><ServiceLine label="Déconnexion individuelle / révoquer toutes" status="Disponible · action journalisée" /></article>
+  </div>;
 }
 
-function UsersSection({ data, search, setSearch, submit, change, createReset, beginCreate, beginEdit, viewActivity, isOwnerWorkspace }: {
+function DiagnosticsSection({ data }: { data: Overview | null }) {
+  if (!data?.services) return <EmptyState text="Diagnostic indisponible." />;
+  return <div className="sa-diagnostics-grid"><article className="sa-panel"><div className="sa-panel-heading"><div><p>Diagnostic</p><h2>État des services</h2></div><Activity size={18} /></div><ServiceLine label="MariaDB / Prisma" status={data.services.database} /><ServiceLine label="Messagerie de récupération" status={data.services.email} /><ServiceLine label="Échecs enregistrés sur 24 h" status={data.services.recentFailures ? String(data.services.recentFailures) : 'aucun'} warning={data.services.recentFailures > 0} /><ServiceLine label="Environnement" status={data.environment ?? 'unknown'} /><ServiceLine label="Version" status={data.version ?? '0.1.0'} /></article><article className="sa-panel"><div className="sa-panel-heading"><div><p>Événements</p><h2>Erreurs récentes (24 h)</h2></div><Activity size={18} /></div>{data.security.recentFailures.length ? <ul className="sa-failure-list">{data.security.recentFailures.map((event) => <li key={event.id}><strong>Échec de connexion · {event.email ?? 'identifiant non enregistré'}</strong><time>{formatDate(event.createdAt)}</time></li>)}</ul> : <EmptyState text="Aucun échec enregistré sur les dernières 24 heures." />}</article><article className="sa-panel"><div className="sa-panel-heading"><div><p>Confidentialité</p><h2>Diagnostic sans secrets</h2></div><LockKeyhole size={18} /></div><p className="sa-diagnostic-copy">Cette vue n’affiche que les événements d’échec et leur type. Les mots de passe, jetons, adresses IP et données personnelles inutiles restent masqués.</p><div className="sa-info-box"><Database size={16} />Le détail d’un changement métier se consulte dans le journal d’audit.</div></article></div>;
+}
+
+function UsersSection({ data, roles, search, setSearch, roleFilter, setRoleFilter, statusFilter, setStatusFilter, submit, change, createReset, beginCreate, beginEdit, viewActivity, viewProfile, isOwnerWorkspace }: {
   data: User[];
+  roles: Role[];
   search: string;
   setSearch: (value: string) => void;
+  roleFilter: string;
+  setRoleFilter: (value: string) => void;
+  statusFilter: string;
+  setStatusFilter: (value: string) => void;
   submit: (event: FormEvent<HTMLFormElement>) => void;
   change: (user: User) => void;
   createReset: (user: User) => void;
   beginCreate: () => void;
   beginEdit: (user: User) => void;
   viewActivity: (user: User) => void;
+  viewProfile: (user: User) => void;
   isOwnerWorkspace: boolean;
 }) {
   return <>
@@ -529,6 +646,8 @@ function UsersSection({ data, search, setSearch, submit, change, createReset, be
     </div>
     <form className="sa-search-row" onSubmit={submit}>
       <div className="sa-search-input"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Nom, e-mail ou rôle" /></div>
+      <select aria-label="Filtrer par rôle" value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}><option value="">Tous les rôles</option>{roles.map((role) => <option key={role.id} value={role.code}>{role.name}</option>)}<option value="SUPER_ADMIN">Super Administrateur</option></select>
+      <select aria-label="Filtrer par statut" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">Tous les statuts</option><option value="active">Actifs</option><option value="suspended">Suspendus</option></select>
       <button className="sa-button primary">Rechercher</button>
     </form>
     <div className="sa-panel sa-table-panel">
@@ -541,7 +660,8 @@ function UsersSection({ data, search, setSearch, submit, change, createReset, be
           <td>{formatDate(user.lastLoginAt)}</td>
           <td><Status active={user.active} /></td>
           <td><div className="sa-row-actions">
-              {user.platformAdmin && <span className="sa-tag">Super Admin</span>}
+              <button className="sa-button subtle" onClick={() => viewProfile(user)} aria-label={`Ouvrir l’espace de ${user.name}`} title="Ouvrir l’espace utilisateur"><Eye size={15} /> Voir l’espace</button>
+              {user.platformAdmin && <span className="sa-tag">Super Administrateur</span>}
               {!user.platformAdmin && <><button className="sa-button subtle" onClick={() => beginEdit(user)}>Modifier</button><button className="sa-button subtle" onClick={() => viewActivity(user)}>Activité</button><button className="sa-button subtle" disabled={!user.active} onClick={() => createReset(user)}>Réinitialiser</button></>}
               <button className="sa-button subtle" onClick={() => change(user)}>{user.active ? 'Suspendre' : 'Réactiver'}</button>
           </div></td>
@@ -551,9 +671,8 @@ function UsersSection({ data, search, setSearch, submit, change, createReset, be
   </>;
 }
 
-function StaffActivityDialog({ data, currency, range, setRange, apply, close }: {
+function StaffActivityDialog({ data, range, setRange, apply, close }: {
   data: StaffActivity;
-  currency: string;
   range: { from: string; to: string };
   setRange: (range: { from: string; to: string }) => void;
   apply: () => void;
@@ -567,14 +686,14 @@ function StaffActivityDialog({ data, currency, range, setRange, apply, close }: 
       <div className="sa-metric"><span className="sa-metric-label">Réservations créées</span><strong>{metrics.reservationsCreated}</strong></div>
       <div className="sa-metric"><span className="sa-metric-label">Clients enregistrés</span><strong>{metrics.clientsCreated}</strong></div>
       <div className="sa-metric"><span className="sa-metric-label">Paiements reçus</span><strong>{metrics.paymentsCount}</strong></div>
-      <div className="sa-metric"><span className="sa-metric-label">Montant encaissé</span><strong>{new Intl.NumberFormat('fr-FR', { style: 'currency', currency }).format(Number(metrics.amountCollected))}</strong></div>
+      <div className="sa-metric"><span className="sa-metric-label">Montant encaissé</span><strong>{new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'XAF' }).format(Number(metrics.amountCollected))}</strong></div>
       <div className="sa-metric"><span className="sa-metric-label">Caisses ouvertes / clôturées</span><strong>{metrics.cashSessionsOpened} / {metrics.cashSessionsClosed}</strong></div>
       <div className="sa-metric"><span className="sa-metric-label">Opérations journalisées</span><strong>{metrics.auditEvents}</strong></div>
     </div>
     <div className="sa-panel-heading"><div><p>Traçabilité</p><h3>Dernières opérations</h3></div></div>
-    {data.events.length ? <div className="sa-table-wrap sa-activity-table"><table className="sa-table"><thead><tr><th>Date et heure</th><th>Opération</th><th>Résultat</th><th>Cible</th><th>Détails</th></tr></thead><tbody>{data.events.map((event) => <tr key={event.id}><td>{formatDate(event.createdAt)}</td><td>{event.action}</td><td><Status active={event.result === 'SUCCESS'} label={event.result} /></td><td>{event.targetId ?? '—'}</td><td><details><summary>Consulter</summary><pre>{JSON.stringify(event.details, null, 2)}</pre></details></td></tr>)}</tbody></table></div> : <EmptyState text="Aucune activité réception sur cette période." />}
+    {data.events.length ? <div className="sa-table-wrap sa-activity-table"><table className="sa-table"><thead><tr><th>Date et heure</th><th>Opération</th><th>Résultat</th><th>Cible</th><th>Détails</th></tr></thead><tbody>{data.events.map((event) => <tr key={event.id}><td>{formatDate(event.createdAt)}</td><td>{activityActionLabel(event.action)}</td><td><Status active={event.result === 'SUCCESS'} label={activityResultLabel(event.result)} /></td><td>{event.targetId ?? '—'}</td><td><details><summary>Consulter</summary><pre>{JSON.stringify(event.details, null, 2)}</pre></details></td></tr>)}</tbody></table></div> : <EmptyState text="Aucune activité réception sur cette période." />}
     <div className="sa-panel-heading"><div><p>Clôtures personnelles</p><h3>Historique des caisses</h3></div></div>
-    {data.cashSessions.length ? <div className="sa-table-wrap sa-activity-table"><table className="sa-table"><thead><tr><th>Ouverture</th><th>Statut</th><th>Fonds initial</th><th>Espèces théoriques</th><th>Comptées</th><th>Écart</th></tr></thead><tbody>{data.cashSessions.map((session) => <tr key={session.id}><td>{formatDate(session.openedAt)}</td><td>{session.status === 'CLOSED' ? 'Clôturée' : 'Ouverte'}</td><td>{session.openingAmount}</td><td>{session.expectedCash ?? '—'}</td><td>{session.countedAmount ?? '—'}</td><td>{session.variance ?? '—'}</td></tr>)}</tbody></table></div> : <EmptyState text="Aucune caisse sur la période." />}
+    {data.cashSessions.length ? <div className="sa-table-wrap sa-activity-table"><table className="sa-table"><thead><tr><th>Ouverture</th><th>Statut</th><th>Fonds initial (XAF)</th><th>Espèces théoriques (XAF)</th><th>Comptées (XAF)</th><th>Écart (XAF)</th></tr></thead><tbody>{data.cashSessions.map((session) => <tr key={session.id}><td>{formatDate(session.openedAt)}</td><td>{session.status === 'CLOSED' ? 'Clôturée' : 'Ouverte'}</td><td>{session.openingAmount}</td><td>{session.expectedCash ?? '—'}</td><td>{session.countedAmount ?? '—'}</td><td>{session.variance ?? '—'}</td></tr>)}</tbody></table></div> : <EmptyState text="Aucune caisse sur la période." />}
     <div className="sa-modal-actions"><button className="sa-button" onClick={close}>Fermer</button></div>
   </section></div>;
 }
@@ -627,7 +746,8 @@ function InventorySection({ data, categoryForm, setCategoryForm, roomForm, setRo
   currency: string;
 }) {
   const firstCategory = data?.categories[0]?.id ?? '';
-  const currencyName = currency === 'XAF' ? 'FCFA' : currency;
+  const displayCurrency = data?.currency ?? currency;
+  const currencyName = displayCurrency === 'XAF' ? 'FCFA' : displayCurrency;
   const [catalogView, setCatalogView] = useState<'groups' | 'floors'>('groups');
   const [catalogGroup, setCatalogGroup] = useState('all');
   const [catalogFloor, setCatalogFloor] = useState('all');
@@ -699,7 +819,7 @@ function InventorySection({ data, categoryForm, setCategoryForm, roomForm, setRo
           <label><span>Nom</span><input value={categoryForm.name} onChange={(event) => setCategoryForm({ ...categoryForm, name: event.target.value })} minLength={2} maxLength={100} required /></label>
           <label><span>Capacité max. (vide = sans limite)</span><input type="number" min={1} max={2147483647} value={categoryForm.capacity} onChange={(event) => setCategoryForm({ ...categoryForm, capacity: event.target.value })} /></label>
           <label><span>Tarif nuit ({currencyName})</span><input inputMode="decimal" value={categoryForm.nightlyRate} onChange={(event) => setCategoryForm({ ...categoryForm, nightlyRate: event.target.value })} pattern="^(?:0|[1-9]\d{0,7})(?:\.\d{1,2})?$" required /></label>
-          <label><span>Tarif sieste (facultatif)</span><input inputMode="decimal" value={categoryForm.siestaRate} onChange={(event) => setCategoryForm({ ...categoryForm, siestaRate: event.target.value })} pattern="^(?:0|[1-9]\d{0,7})(?:\.\d{1,2})?$" /></label>
+          <label><span>Tarif sieste ({currencyName}, facultatif)</span><input inputMode="decimal" value={categoryForm.siestaRate} onChange={(event) => setCategoryForm({ ...categoryForm, siestaRate: event.target.value })} pattern="^(?:0|[1-9]\d{0,7})(?:\.\d{1,2})?$" /></label>
           <button className="sa-button primary"><Plus size={14} />Ajouter</button>
         </form>
       </section>

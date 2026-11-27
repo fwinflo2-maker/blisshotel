@@ -8,6 +8,7 @@ import { db } from '@/server/db';
 import { hotelConfiguration } from '@/server/hotel';
 import { countNights, folioTotals, hotelDateKey, lockAndCheckRoom, parseDateOnly, parseHotelDateTime } from '@/server/reception';
 import { isRateOutsideRange, nightlyRatePolicy, siestaEndAt } from '@/features/reception/domain';
+import { convertFromXaf, convertToXaf } from '@/server/currency';
 
 export const instant = false;
 
@@ -84,7 +85,8 @@ export async function GET(request: Request) {
       .filter((value): value is 'PENDING' | 'CONFIRMED' | 'CANCELLED' | 'CHECKED_IN' | 'CHECKED_OUT' =>
         ['PENDING', 'CONFIRMED', 'CANCELLED', 'CHECKED_IN', 'CHECKED_OUT'].includes(value));
     const period = url.searchParams.get('period') ?? 'all';
-    const today = parseDateOnly(hotelDateKey(new Date(), (await hotelConfiguration()).timezone));
+    const configuration = await hotelConfiguration();
+    const today = parseDateOnly(hotelDateKey(new Date(), configuration.timezone));
     let periodWhere: Prisma.ReservationWhereInput = {};
     if (period === 'upcoming') periodWhere = { checkOutDate: { gt: today }, status: { in: ['PENDING', 'CONFIRMED'] } };
     if (period === 'past') periodWhere = { checkOutDate: { lte: today }, status: { in: ['CANCELLED', 'CHECKED_OUT'] } };
@@ -110,7 +112,16 @@ export async function GET(request: Request) {
       include: includeReservation,
     });
     const visibility = { canViewClientContact: scope.permissions.includes('clients.view'), canViewFinancial: scope.roleCode !== 'HOTEL_ADMIN' || scope.permissions.includes('reports.financial.view'), canViewRates: scope.roleCode !== 'HOTEL_ADMIN' || scope.permissions.includes('rooms.rates.view') };
-    return NextResponse.json({ reservations: reservations.map((reservation) => presentReservation(reservation, visibility)) });
+    return NextResponse.json({
+      reservations: await Promise.all(reservations.map(async (reservation) => ({
+        ...presentReservation(reservation, visibility),
+        nightlyRateInput: visibility.canViewRates || visibility.canViewFinancial
+          ? reservation.inputNightlyRate && reservation.inputCurrency === configuration.currency
+            ? reservation.inputNightlyRate.toFixed(2)
+            : (await convertFromXaf(reservation.nightlyRate, configuration.currency)).toFixed(2)
+          : null,
+      }))),
+    });
   } catch (error) {
     if (error instanceof AppError) return NextResponse.json({ error: error.message }, { status: error.status });
     throw error;
@@ -127,6 +138,8 @@ const createSchema = z.object({
   agreedRate: z.string().regex(/^(?:0|[1-9]\d{0,7})(?:\.\d{1,2})?$/).optional(),
   rateReason: z.string().trim().max(500).optional(),
   includeBreakfast: z.boolean().default(false),
+  includeCommission: z.boolean().default(false),
+  breakfastName: z.string().trim().min(2).max(160).default('Petit-déjeuner'),
   adults: z.number().int().min(1).max(2147483647).default(1),
   children: z.number().int().min(0).max(2147483647).default(0),
   idempotencyKey: z.string().min(16).max(100),
@@ -146,6 +159,9 @@ const createSchema = z.object({
   if (value.includeBreakfast && (!value.roomId || value.stayType !== 'OVERNIGHT')) {
     context.addIssue({ code: 'custom', path: ['includeBreakfast'], message: 'Le petit déjeuner est disponible uniquement avec une chambre en nuitée.' });
   }
+  if (value.includeCommission && (!value.roomId || value.stayType !== 'OVERNIGHT')) {
+    context.addIssue({ code: 'custom', path: ['includeCommission'], message: 'La commission est disponible uniquement avec une chambre en nuitée.' });
+  }
 });
 
 export async function POST(request: Request) {
@@ -161,6 +177,7 @@ export async function POST(request: Request) {
     adults: number;
     children: number;
     agreedRate: string;
+    inputCurrency: string;
     rateReason: string | null;
   } | null = null;
   try {
@@ -176,6 +193,8 @@ export async function POST(request: Request) {
     if (scope.roleCode === 'HOTEL_ADMIN' && !input.roomId) throw new AppError(400, 'Une réservation Administrateur Hôtel doit concerner une chambre attribuée.');
     if (input.roomId) await assertAssignedRoom(scope, input.roomId);
     const configuration = await hotelConfiguration();
+    const inputRate = input.roomId ? input.agreedRate! : '0';
+    const rate = await convertToXaf(inputRate, configuration.currency);
     const checkInDate = parseDateOnly(input.checkInDate);
     const today = hotelDateKey(new Date(), configuration.timezone);
     let checkOutDate: Date;
@@ -219,7 +238,8 @@ export async function POST(request: Request) {
       plannedCheckOutAt,
       adults: input.adults,
       children: input.children,
-      agreedRate: input.roomId ? input.agreedRate! : '0',
+      agreedRate: inputRate,
+      inputCurrency: configuration.currency,
       rateReason: input.rateReason?.trim() || null,
     };
 
@@ -238,14 +258,15 @@ export async function POST(request: Request) {
           && existing.plannedCheckOutAt?.getTime() === plannedCheckOutAt.getTime()
           && existing.adults === input.adults
           && existing.children === input.children
-          && existing.nightlyRate.equals(input.roomId ? input.agreedRate! : '0')
+          && (existing.inputNightlyRate ?? existing.nightlyRate).equals(inputRate)
+          && (existing.inputCurrency ?? 'XAF') === configuration.currency
           && existing.rateReason === (input.rateReason?.trim() || null);
         if (!sameRequest) throw new AppError(409, 'Cette clé de réservation a déjà été utilisée pour une autre demande.');
         return { reservation: existing, duplicate: true };
       }
 
       const [client, room] = await Promise.all([
-        tx.client.findFirst({ where: { id: input.clientId }, select: { id: true } }),
+        tx.client.findFirst({ where: { id: input.clientId }, select: { id: true, name: true } }),
         input.roomId
           ? lockAndCheckRoom(tx, input.roomId, checkInDate, checkOutDate, {
             allowDirtyForFuture: input.checkInDate > today,
@@ -262,7 +283,6 @@ export async function POST(request: Request) {
         throw new AppError(400, 'Le nombre d\u2019occupants dépasse la capacité de la chambre.');
       }
 
-      const rate = new Prisma.Decimal(room ? input.agreedRate! : '0');
       if (room && !rate.gt(0)) throw new AppError(400, 'Le tarif convenu doit être supérieur à zéro.');
       const ratePolicy = room
         ? nightlyRatePolicy(
@@ -270,8 +290,17 @@ export async function POST(request: Request) {
           (room.nightlyRateMax ?? room.category.nightlyRate).toFixed(2),
         )
         : null;
-      const breakfastPrice = room && input.includeBreakfast && input.stayType === 'OVERNIGHT'
-        ? new Prisma.Decimal(5000)
+      const breakfastItem = input.includeBreakfast
+        ? await tx.restaurantMenuItem.findUnique({ where: { code: 'BREAKFAST_ROOM_NIGHT' } })
+        : null;
+      if (input.includeBreakfast && (!breakfastItem?.active || !room)) {
+        throw new AppError(409, 'Le petit-déjeuner est actuellement indisponible. Contactez le restaurant.');
+      }
+      const breakfastPrice = breakfastItem?.active && room && input.includeBreakfast && input.stayType === 'OVERNIGHT'
+        ? new Prisma.Decimal(breakfastItem.price)
+        : new Prisma.Decimal(0);
+      const commissionAmount = input.includeCommission && room && input.stayType === 'OVERNIGHT'
+        ? new Prisma.Decimal(rate.lte(20000) ? 0 : rate.lte(25000) ? 2500 : 5000)
         : new Prisma.Decimal(0);
       const outsideRange = Boolean(room && input.stayType === 'OVERNIGHT'
         && ratePolicy
@@ -286,6 +315,16 @@ export async function POST(request: Request) {
           ? rate
           : rate.mul(nights).toDecimalPlaces(2);
       const totalAmount = accommodationAmount.add(breakfastPrice).toDecimalPlaces(2);
+      if (commissionAmount.gt(0)) {
+        const [cashMethod, cashSession] = await Promise.all([
+          tx.paymentMethod.findFirst({ where: { code: 'CASH', active: true }, select: { id: true } }),
+          tx.cashSession.findFirst({ where: { userId: scope.userId, status: 'OPEN' }, select: { id: true } }),
+        ]);
+        if (!cashMethod || !cashSession) throw new AppError(409, 'Une caisse de réception ouverte est nécessaire pour déduire la commission.');
+      }
+      if (totalAmount.gt('99999999.99')) {
+        throw new AppError(400, 'Le total du séjour dépasse la limite comptable autorisée en XAF.');
+      }
       const reference = `BH-${Date.now().toString(36).toUpperCase()}-${randomBytes(3).toString('hex').toUpperCase()}`;
       const reservation = await tx.reservation.create({
         data: {
@@ -301,6 +340,8 @@ export async function POST(request: Request) {
           adults: input.adults,
           children: input.children,
           nightlyRate: rate,
+          inputNightlyRate: new Prisma.Decimal(inputRate),
+          inputCurrency: configuration.currency,
           rateReason,
           totalAmount: accommodationAmount,
           createdBy: scope.userId,
@@ -317,7 +358,7 @@ export async function POST(request: Request) {
                   createdBy: scope.userId,
                 }, ...(breakfastPrice.gt(0) ? [{
                   type: 'SERVICE' as const,
-                  description: 'Petit-déjeuner',
+                  description: input.breakfastName,
                   amount: breakfastPrice,
                   createdBy: scope.userId,
                 }] : [])],
@@ -327,36 +368,27 @@ export async function POST(request: Request) {
         },
         include: includeReservation,
       });
-      if (breakfastPrice.gt(0) && room) {
-        const now = new Date();
-        const orderNumber = `R-${now.toISOString().slice(2, 10).replaceAll('-', '')}-${randomBytes(3).toString('hex').toUpperCase()}`;
-        await tx.restaurantOrder.create({
-          data: {
-            number: orderNumber,
-            source: 'ROOM_SERVICE',
-            status: 'CONFIRMED',
-            reservationId: reservation.id,
-            roomId: room.id,
-            guestName: client.name,
-            notes: `Petit-déjeuner · Chambre ${room.number} · déjà porté au folio.`,
-            totalAmount: breakfastPrice,
-            createdBy: scope.userId,
-            createdByName: scope.name,
-            confirmedBy: scope.userId,
-            confirmedByName: scope.name,
-            confirmedAt: now,
-            lines: {
-              create: {
-                name: 'Petit-déjeuner',
-                category: 'BREAKFAST',
-                billingUnit: 'ITEM',
-                quantity: 1,
-                unitPrice: breakfastPrice,
-                lineTotal: breakfastPrice,
-              },
-            },
-          },
-        });
+      if (commissionAmount.gt(0)) {
+        const cashMethod = await tx.paymentMethod.findFirst({ where: { code: 'CASH', active: true }, select: { id: true } });
+        const cashSession = await tx.cashSession.findFirst({ where: { userId: scope.userId, status: 'OPEN' }, select: { id: true } });
+        if (!cashMethod || !cashSession) throw new AppError(409, 'La caisse de réception n’est plus ouverte.');
+        await tx.payment.create({ data: {
+          cashSessionId: cashSession.id,
+          paymentMethodId: cashMethod.id,
+          receivedBy: scope.userId,
+          idempotencyKey: `COMMISSION-${reservation.id}`,
+          amount: commissionAmount.neg(),
+          description: `Commission réservation ${reservation.reference}`,
+          reference: reservation.reference,
+        } });
+      }
+      if (input.includeBreakfast && room && breakfastItem?.active) {
+        const restaurantUsers = await tx.user.findMany({ where: { active: true, role: { code: { in: ['BAR_SERVER', 'RESTAURANT_MANAGER'] } } }, select: { id: true } });
+        if (restaurantUsers.length) {
+          await tx.notification.createMany({
+            data: restaurantUsers.map(({ id }) => ({ userId: id, message: `${input.breakfastName} associé à la chambre ${room.number} pour ${client.name} · ${breakfastPrice.toFixed(0)} FCFA.` })),
+          });
+        }
       }
       await tx.auditLog.create({
         data: {
@@ -371,6 +403,8 @@ export async function POST(request: Request) {
             checkOutDate: checkOutDate.toISOString().slice(0, 10),
             stayType: input.stayType,
             agreedRate: rate.toFixed(2),
+            inputAgreedRate: inputRate,
+            inputCurrency: configuration.currency,
             rateReason,
             ...(input.stayType === 'OVERNIGHT' && ratePolicy ? {
               nightlyRateMin: ratePolicy.minimum,
@@ -381,6 +415,7 @@ export async function POST(request: Request) {
             plannedCheckOutAt: plannedCheckOutAt.toISOString(),
             accommodationAmount: accommodationAmount.toFixed(2),
             breakfastAmount: breakfastPrice.toFixed(2),
+            commissionDeductedFromCash: commissionAmount.toFixed(2),
             folioTotalAmount: totalAmount.toFixed(2),
           },
         },
@@ -410,7 +445,8 @@ export async function POST(request: Request) {
             && duplicate.plannedCheckOutAt?.getTime() === retryContext.plannedCheckOutAt.getTime()
             && duplicate.adults === retryContext.adults
             && duplicate.children === retryContext.children
-            && duplicate.nightlyRate.equals(retryContext.agreedRate)
+            && (duplicate.inputNightlyRate ?? duplicate.nightlyRate).equals(retryContext.agreedRate)
+            && (duplicate.inputCurrency ?? 'XAF') === retryContext.inputCurrency
             && duplicate.rateReason === retryContext.rateReason;
           if (sameRequest) {
             return NextResponse.json({

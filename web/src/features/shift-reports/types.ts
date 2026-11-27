@@ -14,6 +14,7 @@ export type ShiftReport = {
   createdAt: string;
   user: { id: string; name: string };
   summary: {
+    department?: 'RECEPTION' | 'BAR_RESTAURANT';
     operations: {
       reservationsCreated: number;
       reservationsConfirmed: number;
@@ -21,11 +22,27 @@ export type ShiftReport = {
       checkIns: number;
       checkOuts: number;
     };
+    stayOperations?: {
+      checkIns: { reference: string; clientName: string; roomNumber: string | null; recordedAt: string }[];
+      checkOuts: { reference: string; clientName: string; roomNumber: string | null; recordedAt: string }[];
+    };
+    reservations?: {
+      reservationsCount: number;
+      clientsCount: number;
+      paidClients: number;
+      unpaidClients: number;
+      clients: { name: string; registeredBy: string; references: string[]; rooms?: string[]; paymentStatus: 'PAYE' | 'NON_PAYE' }[];
+    };
+    invoicesSettled?: {
+      count: number;
+      clients: { invoiceNumber: string; clientName: string; registeredBy: string; reference: string; roomNumber?: string | null; settledAt: string }[];
+    };
     payments: {
       count: number;
       total: string;
       byMethod: { code: string; name: string; amount: string }[];
     };
+    commissions?: { count: number; total: string; registeredBy: string; entries?: { reservationReference: string; amount: string; createdAt: string }[] };
     cash: {
       openingAmount: string;
       cashReceived: string;
@@ -37,6 +54,7 @@ export type ShiftReport = {
     };
     restaurant?: {
       ordersCount: number;
+      servedCount?: number;
       total: string;
       foodTotal: string;
       drinkTotal: string;

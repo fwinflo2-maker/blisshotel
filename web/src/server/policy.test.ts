@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { roleTemplates } from '../features/access/catalog';
-import { AppError, assertOwnCashSession, assertPermission, assertPlatformAccess, assertRoomAssignmentManager, canAccessGodMode, canViewGodModeProfile, roomAssignmentFilter } from './policy';
+import { AppError, assertOwnCashSession, assertOwnerAccess, assertPermission, assertPlatformAccess, assertPlatformAdmin, assertRoomAssignmentManager, canAccessGodMode, canViewGodModeProfile, roomAssignmentFilter } from './policy';
 
 describe('administration plateforme', () => {
   it('réserve la console aux comptes Super Administrateur', () => {
@@ -45,6 +45,30 @@ describe('administration plateforme', () => {
       }
     },
   );
+});
+
+describe('administration Super Administrateur', () => {
+  it('réserve les outils globaux au compte Super Administrateur', () => {
+    expect(() => assertPlatformAdmin({ platformAdmin: true })).not.toThrow();
+    for (const user of [
+      { platformAdmin: false, role: { code: 'OWNER' } },
+      { platformAdmin: false, role: { code: 'RECEPTIONIST' } },
+    ]) expect(() => assertPlatformAdmin(user)).toThrowError(AppError);
+  });
+});
+
+describe('accès au tableau de bord propriétaire', () => {
+  it('autorise uniquement le rôle OWNER non-superadministrateur', () => {
+    expect(() => assertOwnerAccess({ platformAdmin: false, role: { code: 'OWNER' } })).not.toThrow();
+    for (const user of [
+      { platformAdmin: false, role: { code: 'RECEPTIONIST' } },
+      { platformAdmin: false, role: { code: 'ACCOUNTANT' } },
+      { platformAdmin: true, role: { code: 'OWNER' } },
+      { platformAdmin: false, role: null },
+    ]) {
+      expect(() => assertOwnerAccess(user)).toThrowError(AppError);
+    }
+  });
 });
 
 describe('attributions centralisées des chambres', () => {

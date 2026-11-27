@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { db } from '@/server/db';
-import { platformApi } from '@/server/platform-admin';
+import { hotelManagementApi } from '@/server/platform-admin';
 
 const schema = z.object({ permissionCodes: z.array(z.string().min(1).max(100)).max(100) });
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  return platformApi(async (actor) => {
+  return hotelManagementApi(async (actor) => {
     const { id } = await params;
     const parsed = schema.safeParse(await request.json().catch(() => null));
     if (!parsed.success || new Set(parsed.data?.permissionCodes ?? []).size !== parsed.data?.permissionCodes.length) {
@@ -19,6 +19,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     }
     if (role.code === 'HOTEL_ADMIN') return NextResponse.json({ error: 'Les accès des Administrateurs Hôtel se règlent individuellement dans « Permissions individuelles ». ' }, { status: 409 });
     if (role.code === 'SUPER_ADMIN') return NextResponse.json({ error: 'Le rôle Super Administrateur est protégé.' }, { status: 409 });
+    if (role.code === 'BAR_SERVER' && parsed.data.permissionCodes.some((code) => ['restaurant.menu.manage', 'restaurant.stock.manage'].includes(code))) {
+      return NextResponse.json({ error: 'Les permissions de gestion de la carte et des stocks sont réservées à la Responsable Restaurant et Bar.' }, { status: 403 });
+    }
     if (parsed.data.permissionCodes.includes('platform.manage')) {
       return NextResponse.json({ error: 'La permission plateforme ne peut pas être déléguée à un rôle hôtelier.' }, { status: 403 });
     }
@@ -29,6 +32,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
     await db.$transaction(async (tx) => {
       await tx.rolePermission.deleteMany({ where: { roleId: id } });
+      await tx.session.deleteMany({ where: { user: { roleId: id } } });
       if (parsed.data.permissionCodes.length) {
         await tx.rolePermission.createMany({
           data: parsed.data.permissionCodes.map((permissionCode) => ({ roleId: id, permissionCode })),

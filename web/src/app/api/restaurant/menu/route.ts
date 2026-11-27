@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authorizedScope } from '@/server/auth';
@@ -9,9 +10,10 @@ export const instant = false;
 const menuItemSchema = z.object({
   name: z.string().trim().min(2).max(160),
   description: z.string().trim().max(500).optional().nullable(),
-  category: z.enum(['FOOD', 'DRINK', 'BREAKFAST']),
+  category: z.enum(['FOOD', 'DRINK', 'BREAKFAST', 'SOFT_DRINK', 'JUICE', 'WATER', 'BEER', 'WINE', 'WHISKY', 'SPIRIT', 'COCKTAIL', 'STARTER', 'DESSERT', 'OTHER']),
   billingUnit: z.enum(['ITEM', 'ROOM_NIGHT']).default('ITEM'),
   price: z.coerce.number().finite().min(0).max(100000000),
+  purchasePrice: z.coerce.number().finite().min(0).max(100000000).optional(),
 });
 
 export async function GET() {
@@ -19,7 +21,7 @@ export async function GET() {
     const scope = await authorizedScope('restaurant.orders.manage');
     const canManage = scope.permissions.includes('restaurant.menu.manage');
     const items = await db.restaurantMenuItem.findMany({
-      where: canManage ? {} : { active: true },
+      where: canManage ? { deletedAt: null } : { active: true, deletedAt: null },
       orderBy: [{ category: 'asc' }, { name: 'asc' }],
     });
     return NextResponse.json({ items: items.map((item) => ({ ...item, price: item.price.toFixed(2) })) });
@@ -38,7 +40,9 @@ export async function POST(request: Request) {
       data: {
         ...parsed.data,
         description: parsed.data.description || null,
+        code: `PRD-${randomUUID().toUpperCase()}`,
         price: parsed.data.price.toFixed(2),
+        ...(parsed.data.purchasePrice !== undefined ? { purchasePrice: parsed.data.purchasePrice.toFixed(2) } : {}),
       },
     });
     await db.auditLog.create({

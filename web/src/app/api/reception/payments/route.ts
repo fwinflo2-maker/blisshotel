@@ -4,8 +4,10 @@ import { z } from 'zod';
 import { authorizedScope } from '@/server/auth';
 import { AppError, assertOwnCashSession } from '@/server/policy';
 import { db } from '@/server/db';
+import { hotelConfiguration } from '@/server/hotel';
 import { folioTotals, notifyReceptionStaff } from '@/server/reception';
 import { isSamePaymentRequest } from '@/features/reception/domain';
+import { convertToXaf } from '@/server/currency';
 
 export const instant = false;
 
@@ -34,7 +36,53 @@ export async function POST(request: Request) {
     if (!parsed.success) return NextResponse.json({ error: 'Montant ou informations de paiement invalides.' }, { status: 400 });
     const input = parsed.data;
     const scope = await authorizedScope('payments.collect');
-    const amount = new Prisma.Decimal(input.amount);
+    const configuration = await hotelConfiguration();
+    const inputAmount = new Prisma.Decimal(input.amount);
+    const priorPayment = await db.payment.findUnique({
+      where: { idempotencyKey: input.idempotencyKey },
+      include: {
+        paymentMethod: { select: { name: true, code: true } },
+        client: { select: { name: true } },
+      },
+    });
+    if (priorPayment) {
+      const sameRequest = isSamePaymentRequest({
+        folioId: priorPayment.folioId,
+        clientId: priorPayment.clientId,
+        paymentMethodId: priorPayment.paymentMethodId,
+        amount: priorPayment.amount.toFixed(2),
+        inputAmount: priorPayment.inputAmount?.toFixed(2) ?? null,
+        inputCurrency: priorPayment.inputCurrency,
+        reference: priorPayment.reference,
+        description: priorPayment.description,
+        receivedBy: priorPayment.receivedBy,
+      }, {
+        folioId: input.folioId ?? null,
+        clientId: input.clientId ?? null,
+        paymentMethodId: input.paymentMethodId,
+        amount: priorPayment.amount.toFixed(2),
+        inputAmount: inputAmount.toFixed(2),
+        inputCurrency: configuration.currency,
+        reference: input.reference || null,
+        description: input.description?.trim() || null,
+        receivedBy: scope.userId,
+      });
+      if (!sameRequest) throw new AppError(409, 'Cette clé de paiement a déjà été utilisée pour une autre opération.');
+      return NextResponse.json({
+        payment: {
+          id: priorPayment.id,
+          amount: priorPayment.amount.toFixed(2),
+          method: priorPayment.paymentMethod.name,
+          reference: priorPayment.reference,
+          description: priorPayment.description,
+          createdAt: priorPayment.createdAt,
+          clientName: priorPayment.client?.name ?? null,
+          reservationReference: null,
+        },
+        duplicate: true,
+      });
+    }
+    const amount = await convertToXaf(inputAmount, configuration.currency);
     if (!amount.gt(0)) return NextResponse.json({ error: 'Le montant doit être supérieur à zéro.' }, { status: 400 });
 
     const result = await db.$transaction(async (tx) => {
@@ -58,6 +106,8 @@ export async function POST(request: Request) {
           clientId: duplicate.clientId,
           paymentMethodId: duplicate.paymentMethodId,
           amount: duplicate.amount.toFixed(2),
+          inputAmount: duplicate.inputAmount?.toFixed(2) ?? null,
+          inputCurrency: duplicate.inputCurrency,
           reference: duplicate.reference,
           description: duplicate.description,
           receivedBy: duplicate.receivedBy,
@@ -66,6 +116,8 @@ export async function POST(request: Request) {
           clientId: input.clientId ?? null,
           paymentMethodId: input.paymentMethodId,
           amount: amount.toFixed(2),
+          inputAmount: inputAmount.toFixed(2),
+          inputCurrency: configuration.currency,
           reference: input.reference || null,
           description: input.description?.trim() || null,
           receivedBy: scope.userId,
@@ -97,14 +149,14 @@ export async function POST(request: Request) {
 
       if (input.folioId) {
         const folio = await tx.folio.findFirst({
-          where: { id: input.folioId, status: 'OPEN' },
+          where: { id: input.folioId, OR: [{ status: 'OPEN' }, { status: 'CLOSED', invoice: { isNot: {} } }] },
           include: {
             lines: { select: { amount: true } },
             payments: { select: { amount: true } },
             reservation: { select: { createdBy: true, reference: true, client: { select: { name: true } } } },
           },
         });
-        if (!folio) throw new AppError(409, 'Ce folio est clôturé ou indisponible.');
+        if (!folio) throw new AppError(409, 'Ce folio ne comporte pas de facture à encaisser.');
         const balance = folioTotals(folio).balance;
         if (amount.gt(balance)) throw new AppError(409, `Le montant dépasse le solde restant de ${balance.toFixed(2)}.`);
 
@@ -116,6 +168,8 @@ export async function POST(request: Request) {
             receivedBy: scope.userId,
             idempotencyKey: input.idempotencyKey,
             amount,
+            inputAmount,
+            inputCurrency: configuration.currency,
             reference: input.reference || null,
           },
           include: { paymentMethod: { select: { name: true, code: true } } },
@@ -126,7 +180,13 @@ export async function POST(request: Request) {
             action: 'RECEPTION_PAYMENT_COLLECT',
             result: 'SUCCESS',
             targetId: payment.id,
-            details: { folioId: input.folioId, amount: amount.toFixed(2), method: payment.paymentMethod.code },
+            details: {
+              folioId: input.folioId,
+              amount: amount.toFixed(2),
+              inputAmount: inputAmount.toFixed(2),
+              inputCurrency: configuration.currency,
+              method: payment.paymentMethod.code,
+            },
           },
         });
         await notifyReceptionStaff(
@@ -158,6 +218,8 @@ export async function POST(request: Request) {
           receivedBy: scope.userId,
           idempotencyKey: input.idempotencyKey,
           amount,
+          inputAmount,
+          inputCurrency: configuration.currency,
           description,
           reference: input.reference || null,
         },
@@ -172,6 +234,8 @@ export async function POST(request: Request) {
           details: {
             clientId: client.id,
             amount: amount.toFixed(2),
+            inputAmount: inputAmount.toFixed(2),
+            inputCurrency: configuration.currency,
             method: payment.paymentMethod.code,
             description,
           },

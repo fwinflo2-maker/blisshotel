@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { db } from '@/server/db';
-import { platformApi } from '@/server/platform-admin';
+import { hotelManagementApi } from '@/server/platform-admin';
 import { assertRoomAssignmentManager } from '@/server/policy';
 
 export const instant = false;
 
 export async function GET() {
-  return platformApi(async (actor) => {
+  return hotelManagementApi(async (actor) => {
     assertRoomAssignmentManager(actor);
     const [rooms, admins] = await Promise.all([
       db.room.findMany({
@@ -23,7 +23,7 @@ export async function GET() {
 const schema = z.object({ assignments: z.array(z.object({ roomId: z.string().min(1), administratorId: z.string().min(1).nullable() })).max(2000) });
 
 export async function PUT(request: Request) {
-  return platformApi(async (actor) => {
+  return hotelManagementApi(async (actor) => {
     assertRoomAssignmentManager(actor);
     const parsed = schema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return NextResponse.json({ error: 'Affectations invalides.' }, { status: 400 });

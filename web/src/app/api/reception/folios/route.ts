@@ -10,7 +10,7 @@ export const instant = false;
 const folioInclude = {
   lines: { select: { amount: true } },
   payments: { select: { amount: true } },
-  invoice: { select: { id: true, number: true, payerName: true, totalAmount: true, issuedAt: true } },
+  invoice: { select: { id: true, number: true, payerName: true, currency: true, totalAmount: true, issuedAt: true } },
   reservation: {
     select: {
       id: true,

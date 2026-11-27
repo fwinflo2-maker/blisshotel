@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/server/db';
-import { platformApi } from '@/server/platform-admin';
+import { hotelManagementApi } from '@/server/platform-admin';
 import { assertRoomAssignmentManager } from '@/server/policy';
 
 export const instant = false;
 
 export async function GET() {
-  return platformApi(async (actor) => {
+  return hotelManagementApi(async (actor) => {
     assertRoomAssignmentManager(actor);
     const administrators = await db.user.findMany({
       where: { role: { code: 'HOTEL_ADMIN' } }, orderBy: { name: 'asc' },

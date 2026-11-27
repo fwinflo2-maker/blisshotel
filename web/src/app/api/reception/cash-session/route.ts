@@ -8,6 +8,7 @@ import { hotelConfiguration } from '@/server/hotel';
 import { hotelDateKey, notifyReceptionStaff, parseDateOnly, folioTotals } from '@/server/reception';
 import { shiftReportInclude } from '@/server/shift-reports';
 import { calculateCashDrawer } from '@/features/shift-reports/domain';
+import { convertToXaf } from '@/server/currency';
 
 export const instant = false;
 
@@ -108,6 +109,8 @@ export async function POST(request: Request) {
     const parsed = openSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return NextResponse.json({ error: 'Le fonds initial doit être un montant positif valide.' }, { status: 400 });
     const scope = await authorizedScope('cash_sessions.open_own');
+    const configuration = await hotelConfiguration();
+    const openingAmount = await convertToXaf(parsed.data.openingAmount, configuration.currency);
     const activeKey = scope.userId;
     const session = await db.$transaction(async (tx) => {
       const active = await tx.cashSession.findFirst({ where: { activeKey }, select: { id: true } });
@@ -116,7 +119,7 @@ export async function POST(request: Request) {
         data: {
           userId: scope.userId,
           activeKey,
-          openingAmount: new Prisma.Decimal(parsed.data.openingAmount),
+          openingAmount,
         },
       });
       await tx.auditLog.create({
@@ -125,7 +128,11 @@ export async function POST(request: Request) {
           action: 'RECEPTION_CASH_SESSION_OPEN',
           result: 'SUCCESS',
           targetId: created.id,
-          details: { openingAmount: created.openingAmount.toFixed(2) },
+          details: {
+            openingAmount: created.openingAmount.toFixed(2),
+            inputAmount: parsed.data.openingAmount,
+            inputCurrency: configuration.currency,
+          },
         },
       });
       return created;
@@ -162,6 +169,11 @@ export async function PATCH(request: Request) {
       throw new AppError(403, 'La permission de consulter et produire le rapport de service est requise pour clôturer la caisse.');
     }
     const configuration = await hotelConfiguration();
+    const countedAmountXaf = await convertToXaf(parsed.data.countedAmount, configuration.currency);
+    const expensesWithAmounts = await Promise.all(parsed.data.expenses.map(async (expense) => ({
+      ...expense,
+      amountDecimal: await convertToXaf(expense.amount, configuration.currency),
+    })));
     const session = await db.$transaction(async (tx) => {
       const locked = await tx.$queryRaw<Array<{ id: string }>>`
         SELECT id FROM CashSession
@@ -183,10 +195,10 @@ export async function PATCH(request: Request) {
       }) : [];
       if (paymentMethods.length !== uniqueMethodIds.length) throw new AppError(400, 'Un moyen de paiement des dépenses est inactif ou invalide.');
       const paymentMethodById = new Map(paymentMethods.map((method) => [method.id, method]));
-      const expenses = parsed.data.expenses.map((expense) => {
+      const expenses = expensesWithAmounts.map((expense) => {
         const paymentMethod = paymentMethodById.get(expense.paymentMethodId);
         if (!paymentMethod) throw new AppError(400, 'Un moyen de paiement des dépenses est inactif ou invalide.');
-        return { ...expense, amountDecimal: new Prisma.Decimal(expense.amount), paymentMethod };
+        return { ...expense, paymentMethod };
       });
       if (expenses.some((expense) => !expense.amountDecimal.gt(0))) {
         throw new AppError(400, 'Chaque dépense doit avoir un montant supérieur à zéro.');
@@ -208,7 +220,7 @@ export async function PATCH(request: Request) {
       const cashPayments = new Prisma.Decimal(cashDrawer.cashReceived);
       const cashExpenses = new Prisma.Decimal(cashDrawer.cashExpenses);
       const expectedCash = new Prisma.Decimal(cashDrawer.expectedCash);
-      const countedAmount = new Prisma.Decimal(parsed.data.countedAmount);
+      const countedAmount = countedAmountXaf;
       const closedAt = new Date();
       const activity = await tx.auditLog.groupBy({
         by: ['action'],
@@ -221,6 +233,33 @@ export async function PATCH(request: Request) {
         _count: { _all: true },
       });
       const activityCount = new Map(activity.map((item) => [item.action, item._count._all]));
+      const stayActivity = await tx.stay.findMany({
+        where: {
+          OR: [
+            { checkedInBy: scope.userId, checkInRecordedAt: { gte: current.openedAt, lte: closedAt } },
+            { checkedOutBy: scope.userId, checkOutRecordedAt: { gte: current.openedAt, lte: closedAt } },
+          ],
+        },
+        select: {
+          checkInRecordedAt: true,
+          checkOutRecordedAt: true,
+          checkedInBy: true,
+          checkedOutBy: true,
+          reservation: {
+            select: {
+              reference: true,
+              client: { select: { name: true } },
+              room: { select: { number: true } },
+            },
+          },
+        },
+      });
+      const checkInEvents = stayActivity
+        .filter((stay) => stay.checkedInBy === scope.userId && stay.checkInRecordedAt)
+        .map((stay) => ({ reference: stay.reservation.reference, clientName: stay.reservation.client.name, roomNumber: stay.reservation.room?.number ?? null, recordedAt: stay.checkInRecordedAt!.toISOString() }));
+      const checkOutEvents = stayActivity
+        .filter((stay) => stay.checkedOutBy === scope.userId && stay.checkOutRecordedAt)
+        .map((stay) => ({ reference: stay.reservation.reference, clientName: stay.reservation.client.name, roomNumber: stay.reservation.room?.number ?? null, recordedAt: stay.checkOutRecordedAt!.toISOString() }));
       const [roomStatuses, housekeepingStatuses, openFolios] = await Promise.all([
         tx.room.groupBy({ by: ['status'], _count: { _all: true } }),
         tx.room.groupBy({ by: ['housekeepingStatus'], _count: { _all: true } }),
@@ -233,9 +272,17 @@ export async function PATCH(request: Request) {
         (sum, folio) => sum.add(folioTotals(folio).balance),
         new Prisma.Decimal(0),
       );
-      const totalPayments = current.payments.reduce((sum, payment) => sum.add(payment.amount), new Prisma.Decimal(0));
+      const clientPayments = current.payments.filter((payment) => payment.amount.gt(0));
+      const totalPayments = clientPayments.reduce((sum, payment) => sum.add(payment.amount), new Prisma.Decimal(0));
+      const commissionPayments = current.payments.filter((payment) => payment.description?.startsWith('Commission réservation'));
+      const commissionsTotal = commissionPayments.reduce((sum, payment) => sum.add(payment.amount.abs()), new Prisma.Decimal(0));
+      const commissionEntries = commissionPayments.map((payment) => ({
+        reservationReference: payment.reference ?? payment.description?.replace('Commission réservation ', '') ?? 'Réservation',
+        amount: payment.amount.abs().toFixed(2),
+        createdAt: payment.createdAt.toISOString(),
+      }));
       const paymentsByMethod = new Map<string, { name: string; amount: Prisma.Decimal }>();
-      for (const payment of current.payments) {
+      for (const payment of clientPayments) {
         const method = paymentsByMethod.get(payment.paymentMethod.code) ?? {
           name: payment.paymentMethod.name,
           amount: new Prisma.Decimal(0),
@@ -248,6 +295,86 @@ export async function PATCH(request: Request) {
         where: { confirmedAt: { gte: current.openedAt, lte: closedAt }, status: { not: 'REJECTED' } },
         include: { lines: { select: { category: true, lineTotal: true } } },
       });
+      const reservationsDuringShift = await tx.reservation.findMany({
+        where: { createdBy: scope.userId, createdAt: { gte: current.openedAt, lte: closedAt } },
+        orderBy: { createdAt: 'asc' },
+        select: {
+          id: true,
+          reference: true,
+          totalAmount: true,
+          createdAt: true,
+          room: { select: { number: true } },
+          client: {
+            select: {
+              id: true,
+              name: true,
+              createdByName: true,
+              creator: { select: { name: true } },
+            },
+          },
+          folio: {
+            select: {
+              payments: { select: { amount: true } },
+            },
+          },
+        },
+      });
+      const reservedClients = new Map<string, { name: string; registeredBy: string; references: string[]; rooms: string[]; paid: boolean }>();
+      for (const reservation of reservationsDuringShift) {
+        const paidAmount = reservation.folio?.payments.reduce((sum, payment) => sum.add(payment.amount), new Prisma.Decimal(0)) ?? new Prisma.Decimal(0);
+        const isPaid = paidAmount.gte(reservation.totalAmount);
+        const existing = reservedClients.get(reservation.client.id);
+        if (existing) {
+          existing.references.push(reservation.reference);
+          existing.rooms.push(reservation.room?.number ?? 'Non attribuée');
+          existing.paid &&= isPaid;
+        } else {
+          reservedClients.set(reservation.client.id, {
+            name: reservation.client.name,
+            registeredBy: reservation.client.createdByName ?? reservation.client.creator?.name ?? 'Non renseigné',
+            references: [reservation.reference],
+            rooms: [reservation.room?.number ?? 'Non attribuée'],
+            paid: isPaid,
+          });
+        }
+      }
+      const invoicesSettledDuringShift = await tx.payment.findMany({
+        where: { cashSessionId: current.id, createdAt: { gte: current.openedAt, lte: closedAt }, folio: { isNot: null } },
+        select: {
+          createdAt: true,
+          cashSessionId: true,
+          folio: {
+            select: {
+              invoice: { select: { number: true, totalAmount: true, issuedAt: true } },
+              payments: { select: { amount: true, cashSessionId: true } },
+              reservation: { select: {
+                reference: true,
+                room: { select: { number: true } },
+                client: { select: { id: true, name: true, createdByName: true, creator: { select: { name: true } } } },
+              } },
+            },
+          },
+        },
+      });
+      const settledInvoices = new Map<string, { invoiceNumber: string; clientName: string; registeredBy: string; reference: string; roomNumber: string | null; settledAt: Date }>();
+      for (const payment of invoicesSettledDuringShift) {
+        const folio = payment.folio;
+        const invoice = folio?.invoice;
+        if (!folio || !invoice || invoice.issuedAt >= current.openedAt) continue;
+        const paidBeforeShift = folio.payments.filter((item) => item.cashSessionId !== current.id).reduce((sum, item) => sum.add(item.amount), new Prisma.Decimal(0));
+        const paidAfter = folio.payments.reduce((sum, item) => sum.add(item.amount), new Prisma.Decimal(0));
+        if (paidBeforeShift.gte(invoice.totalAmount) || !paidAfter.gte(invoice.totalAmount)) continue;
+        const client = folio.reservation.client;
+        const existing = settledInvoices.get(invoice.number);
+        if (!existing || payment.createdAt > existing.settledAt) settledInvoices.set(invoice.number, {
+          invoiceNumber: invoice.number,
+          clientName: client.name,
+          registeredBy: client.createdByName ?? client.creator?.name ?? 'Non renseigné',
+          reference: folio.reservation.reference,
+          roomNumber: folio.reservation.room?.number ?? null,
+          settledAt: payment.createdAt,
+        });
+      }
       const restaurantTotals = restaurantOrders.reduce((totals, order) => {
         totals.total = totals.total.add(order.totalAmount);
         for (const line of order.lines) {
@@ -263,17 +390,41 @@ export async function PATCH(request: Request) {
           reservationsCreated: activityCount.get('RECEPTION_RESERVATION_CREATE') ?? 0,
           reservationsConfirmed: activityCount.get('RECEPTION_RESERVATION_CONFIRM') ?? 0,
           reservationsCancelled: activityCount.get('RECEPTION_RESERVATION_CANCEL') ?? 0,
-          checkIns: activityCount.get('RECEPTION_STAY_CHECK_IN') ?? 0,
-          checkOuts: activityCount.get('RECEPTION_STAY_CHECK_OUT') ?? 0,
+          checkIns: Math.max(checkInEvents.length, (activityCount.get('RECEPTION_STAY_CHECK_IN') ?? 0) + (activityCount.get('RECEPTION_STAY_CHECK_IN_CORRECTED') ?? 0)),
+          checkOuts: Math.max(checkOutEvents.length, activityCount.get('RECEPTION_STAY_CHECK_OUT') ?? 0),
+        },
+        stayOperations: { checkIns: checkInEvents, checkOuts: checkOutEvents },
+        reservations: {
+          reservationsCount: reservationsDuringShift.length,
+          clientsCount: reservedClients.size,
+          paidClients: [...reservedClients.values()].filter((client) => client.paid).length,
+          unpaidClients: [...reservedClients.values()].filter((client) => !client.paid).length,
+          clients: [...reservedClients.values()].map((client) => ({
+            name: client.name,
+            registeredBy: client.registeredBy,
+            references: client.references,
+            rooms: [...new Set(client.rooms)],
+            paymentStatus: client.paid ? 'PAYE' : 'NON_PAYE',
+          })),
+        },
+        invoicesSettled: {
+          count: settledInvoices.size,
+          clients: [...settledInvoices.values()].map((item) => ({ ...item, settledAt: item.settledAt.toISOString() })),
         },
         payments: {
-          count: current.payments.length,
+          count: clientPayments.length,
           total: totalPayments.toFixed(2),
           byMethod: [...paymentsByMethod].map(([code, method]) => ({
             code,
             name: method.name,
             amount: method.amount.toFixed(2),
           })),
+        },
+        commissions: {
+          count: commissionPayments.length,
+          total: commissionsTotal.toFixed(2),
+          registeredBy: scope.name,
+          entries: commissionEntries,
         },
         cash: {
           openingAmount: current.openingAmount.toFixed(2),
@@ -339,8 +490,15 @@ export async function PATCH(request: Request) {
           details: {
             expectedCash: expectedCash.toFixed(2),
             countedAmount: countedAmount.toFixed(2),
+            countedInput: parsed.data.countedAmount,
+            inputCurrency: configuration.currency,
             cashExpenses: cashExpenses.toFixed(2),
             variance: updated.variance?.toFixed(2),
+            expenseInputs: parsed.data.expenses.map(({ description, amount, paymentMethodId }) => ({
+              description,
+              amount,
+              paymentMethodId,
+            })),
           },
         },
       });

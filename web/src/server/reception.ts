@@ -147,7 +147,7 @@ export function folioTotals(folio: { lines: { amount: Prisma.Decimal }[]; paymen
 }
 
 export function parsePeriod(value: string | null): StatPeriod {
-  return value === 'week' || value === 'month' ? value : 'day';
+  return value === 'week' || value === 'month' || value === 'year' ? value : 'day';
 }
 
 /** Period boundaries in the hotel timezone for personal statistics. */
@@ -156,8 +156,8 @@ export function periodRange(period: StatPeriod, now: Date, timezone: string) {
 }
 
 /**
- * Queue in-app notifications for receptionist accounts, excluding the actor.
- * Never throws: notifications must not break a business transaction.
+ * Queue in-app notifications for active account recipients.
+ * Pass excludeUserId when the actor should not receive a copy.
  */
 export async function notifyReceptionStaff(
   tx: Transaction,

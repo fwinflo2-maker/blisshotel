@@ -16,19 +16,26 @@ const requestedOrderItemSchema = z.union([
   }),
   z.object({
     name: z.string().trim().min(2).max(160),
-    category: z.enum(['FOOD', 'DRINK', 'BREAKFAST']),
+    category: z.enum(['FOOD', 'DRINK', 'BREAKFAST', 'SOFT_DRINK', 'JUICE', 'WATER', 'BEER', 'WINE', 'WHISKY', 'SPIRIT', 'COCKTAIL', 'STARTER', 'DESSERT', 'OTHER']),
     quantity: z.coerce.number().int().min(1).max(99),
     unitPrice: z.coerce.number().finite().min(50).max(100000000),
   }),
 ]);
 
 const createOrderSchema = z.object({
-  reservationId: z.string().min(1),
-  roomId: z.string().min(1),
+  reservationId: z.string().min(1).optional(),
+  roomId: z.string().min(1).optional(),
+  guestName: z.string().trim().min(2).max(160).optional(),
+  paymentMethodId: z.string().min(1).optional(),
+  settleImmediately: z.boolean().optional().default(false),
+  receivedAmount: z.coerce.number().finite().min(0).optional(),
   source: z.enum(['ROOM_SERVICE', 'RESTAURANT']),
   items: z.array(requestedOrderItemSchema).min(1).max(30),
   notes: z.string().trim().max(500).optional().default(''),
 }).superRefine((value, context) => {
+  if (!value.reservationId && !value.guestName) context.addIssue({ code: 'custom', path: ['guestName'], message: 'Le nom du client est obligatoire pour une commande sans séjour.' });
+  if (!value.reservationId && value.roomId) context.addIssue({ code: 'custom', path: ['reservationId'], message: 'Une chambre doit être associée à un séjour actif.' });
+  if (!value.reservationId && !value.paymentMethodId) context.addIssue({ code: 'custom', path: ['paymentMethodId'], message: 'Un moyen de paiement est requis pour un client non logé.' });
   const menuItemIds = value.items.flatMap((item) => 'menuItemId' in item ? [item.menuItemId] : []);
   if (new Set(menuItemIds).size !== menuItemIds.length) {
     context.addIssue({ code: 'custom', path: ['items'], message: 'Un produit de la carte ne peut apparaître qu’une fois dans la commande.' });
@@ -41,27 +48,39 @@ export async function GET(request: Request) {
     if (!scope.permissions.includes('restaurant.orders.manage') && !scope.permissions.includes('restaurant.folio.transfer')) {
       throw new AppError(403, 'Vous ne pouvez pas consulter les commandes du restaurant.');
     }
-    const pendingOnly = new URL(request.url).searchParams.get('pending') === 'true';
-    const [orders, activeReservations, rooms] = await Promise.all([
+    const search = new URL(request.url).searchParams;
+    const pendingOnly = search.get('pending') === 'true';
+    const mineOnly = search.get('mine') === 'true';
+    const roomOrdersOnly = search.get('roomOrders') === 'true';
+    const [orders, activeReservations, paymentMethods] = await Promise.all([
       db.restaurantOrder.findMany({
-        where: pendingOnly ? { status: 'PENDING_RECEPTION' } : {},
+        where: {
+          ...(pendingOnly ? { status: 'PENDING_RECEPTION' as const } : {}),
+          ...(mineOnly ? { createdBy: scope.userId } : {}),
+          ...(roomOrdersOnly ? { OR: [{ reservationId: { not: null } }, { roomId: { not: null } }] } : {}),
+        },
         include: restaurantOrderInclude,
         orderBy: [{ createdAt: 'desc' }],
         take: 100,
       }),
       db.reservation.findMany({
           where: { status: 'CHECKED_IN', roomId: { not: null }, stay: { is: { checkedOutAt: null } } },
-          include: { room: { select: { id: true, number: true } }, client: { select: { name: true } }, stay: true, folio: { include: { invoice: true } } },
+          include: { room: { select: { id: true, number: true } }, client: { select: { name: true } }, stay: true, folio: { include: { invoice: true, payments: { select: { amount: true } } } } },
           orderBy: [{ checkOutDate: 'asc' }],
           take: 200,
         }),
-      db.room.findMany({ select: { id: true, number: true }, orderBy: { number: 'asc' } }),
+      db.paymentMethod.findMany({ where: { active: true }, select: { id: true, code: true, name: true }, orderBy: { name: 'asc' } }),
     ]);
     return NextResponse.json({
       orders: orders.map(presentRestaurantOrder),
-      rooms,
+      paymentMethods,
       activeStays: activeReservations
-        .filter((reservation) => reservation.room && reservation.folio?.status === 'OPEN' && !reservation.folio.invoice)
+        .filter((reservation) => {
+          if (!reservation.room || reservation.folio?.status !== 'OPEN') return false;
+          if (!reservation.folio.invoice) return true;
+          const paid = reservation.folio.payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
+          return Number(reservation.folio.invoice.totalAmount) > paid;
+        })
         .map((reservation) => ({
           reservationId: reservation.id,
           reference: reservation.reference,
@@ -80,29 +99,35 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const scope = await authorizedScope('restaurant.orders.manage');
+    if (scope.roleCode !== 'BAR_SERVER') throw new AppError(403, 'La saisie des commandes est réservée aux serveuses.');
     const parsed = createOrderSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return NextResponse.json({ error: 'Vérifiez le séjour, les produits et les quantités.' }, { status: 400 });
-    const { reservationId, roomId, source, notes, items } = parsed.data;
+    const { reservationId, roomId, source, notes, items, paymentMethodId, receivedAmount, settleImmediately } = parsed.data;
+    if (scope.roleCode === 'BAR_SERVER' && items.some((item) => !('menuItemId' in item))) {
+      throw new AppError(403, 'Choisissez un produit et son prix configurés par la Responsable.');
+    }
+    // Une consommation de client non logé est toujours servie au bar-restaurant, jamais en chambre.
+    const effectiveSource = reservationId ? source : 'RESTAURANT' as const;
     const order = await db.$transaction(async (tx) => {
       let reservation = null;
-      let selectedRoom = null;
       if (reservationId) {
         await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM Reservation WHERE id = ${reservationId} FOR UPDATE`;
         reservation = await tx.reservation.findUnique({
           where: { id: reservationId },
-          include: { room: true, client: true, stay: true, folio: { include: { invoice: true } } },
+          include: { room: true, client: true, stay: true, folio: { include: { invoice: true, payments: { select: { amount: true } } } } },
         });
         if (!reservation || reservation.status !== 'CHECKED_IN' || !reservation.room || !reservation.stay || reservation.stay.checkedOutAt) {
           throw new AppError(409, "Le sejour choisi n'est plus en cours. Actualisez la liste.");
         }
         if (roomId && reservation.room.id !== roomId) throw new AppError(409, 'La chambre selectionnee ne correspond pas au sejour choisi.');
-        if (!reservation.folio || reservation.folio.status !== 'OPEN' || reservation.folio.invoice) {
-          throw new AppError(409, 'Le folio du sejour choisi est ferme ou sa facture est deja emise.');
-        }
-      }
-      if (!reservation && roomId) {
-        selectedRoom = await tx.room.findUnique({ where: { id: roomId }, select: { id: true, number: true } });
-        if (!selectedRoom) throw new AppError(404, 'La chambre choisie est introuvable. Actualisez la liste.');
+        if (!reservation.folio || reservation.folio.status !== 'OPEN') throw new AppError(409, 'Le folio du sejour choisi est ferme.');
+        await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM Folio WHERE id = ${reservation.folio.id} FOR UPDATE`;
+        const lockedFolio = await tx.folio.findUnique({ where: { id: reservation.folio.id }, include: { invoice: true, payments: { select: { amount: true } } } });
+        if (!lockedFolio || lockedFolio.status !== 'OPEN') throw new AppError(409, 'Le folio du sejour choisi est ferme.');
+        reservation.folio = lockedFolio;
+        const paid = reservation.folio.payments.reduce((sum, payment) => sum.add(payment.amount), new Prisma.Decimal(0));
+        const outstanding = reservation.folio.invoice ? reservation.folio.invoice.totalAmount.sub(paid) : new Prisma.Decimal(1);
+        if (reservation.folio.invoice && !outstanding.gt(0)) throw new AppError(409, 'La facture de ce sejour est deja reglee.');
       }
       const requestedMenuItemIds = items.flatMap((item) => 'menuItemId' in item ? [item.menuItemId] : []);
       const menuItems = await tx.restaurantMenuItem.findMany({ where: { id: { in: requestedMenuItemIds }, active: true } });
@@ -138,14 +163,20 @@ export async function POST(request: Request) {
       });
       const totalAmount = lineData.reduce((total, line) => total.add(line.lineTotal), new Prisma.Decimal(0));
       if (!totalAmount.gt(0)) throw new AppError(400, 'Le montant de la commande doit être supérieur à zéro.');
+      const directPaymentMethod = (!reservation || settleImmediately) ? await tx.paymentMethod.findFirst({ where: { id: paymentMethodId, active: true }, select: { id: true, code: true, name: true } }) : null;
+      if ((!reservation || settleImmediately) && !directPaymentMethod) throw new AppError(409, 'Choisissez un moyen de paiement actif.');
+      if (directPaymentMethod?.code === 'CASH' && (receivedAmount === undefined || new Prisma.Decimal(receivedAmount).lt(totalAmount))) throw new AppError(400, 'Le montant reçu en espèces doit couvrir la commande.');
+      const cashSession = directPaymentMethod ? await tx.cashSession.findFirst({ where: { userId: scope.userId, status: 'OPEN' }, select: { id: true } }) : null;
+      if (directPaymentMethod && !cashSession) throw new AppError(409, 'Ouvrez votre caisse avant d’encaisser un client externe.');
       const number = `R-${new Date().toISOString().slice(2, 10).replaceAll('-', '')}-${randomBytes(3).toString('hex').toUpperCase()}`;
-      const created = await tx.restaurantOrder.create({
+      let created = await tx.restaurantOrder.create({
         data: {
           number,
-          source,
+          source: effectiveSource,
+          status: reservation ? (settleImmediately ? 'SERVED' : 'PENDING_RECEPTION') : 'SERVED',
           reservationId: reservation?.id ?? null,
           roomId: reservation?.room?.id ?? roomId ?? null,
-          guestName: reservation?.client.name ?? `Client · chambre ${selectedRoom?.number ?? ''}`,
+          guestName: reservation?.client.name ?? parsed.data.guestName!,
           notes: notes || null,
           totalAmount,
           createdBy: scope.userId,
@@ -154,19 +185,37 @@ export async function POST(request: Request) {
         },
         include: restaurantOrderInclude,
       });
-      const receptionists = await tx.user.findMany({
+      if (directPaymentMethod) {
+        const confirmedAt = new Date();
+        await tx.payment.create({ data: {
+          restaurantOrderId: created.id,
+          cashSessionId: cashSession!.id,
+          paymentMethodId: directPaymentMethod.id,
+          amount: totalAmount,
+          idempotencyKey: `RESTAURANT-${created.id}`,
+          receivedBy: scope.userId,
+          reference: created.number,
+          description: directPaymentMethod.code === 'CASH' ? `Commande ${created.number} · reçu ${new Prisma.Decimal(receivedAmount ?? totalAmount).toFixed(2)} · monnaie ${(new Prisma.Decimal(receivedAmount ?? totalAmount).sub(totalAmount)).toFixed(2)}` : `Commande restaurant ${created.number}`,
+        } });
+        created = await tx.restaurantOrder.update({
+          where: { id: created.id },
+          data: { paidAt: confirmedAt, paidBy: scope.userId, paidByName: scope.name, paymentMethodId: directPaymentMethod.id },
+          include: restaurantOrderInclude,
+        });
+      }
+      const receptionists = reservation ? await tx.user.findMany({
         where: { active: true, role: { code: 'RECEPTIONIST' } },
         select: { id: true },
-      });
-      if (receptionists.length) {
-        const roomNumber = reservation?.room?.number ?? selectedRoom?.number ?? 'à rattacher';
-        const message = `Nouvelle consommation ${created.number} — chambre ${roomNumber}, ${lineData.length} article(s), ${totalAmount.toFixed(0)} FCFA. À rattacher au séjour puis valider dans Commandes restaurant.`;
+      }) : [];
+      if (receptionists.length && reservation && !directPaymentMethod) {
+        const roomNumber = reservation?.room?.number ?? 'client non logé';
+        const message = `Commande ${created.number} enregistree pour le client de la chambre ${roomNumber} ; ${totalAmount.toFixed(0)} FCFA a valider en reception avant ajout au folio.`;
         await tx.notification.createMany({
           data: receptionists.map(({ id }) => ({ userId: id, message })),
         });
       }
       await tx.auditLog.create({
-        data: { actorId: scope.userId, action: 'RESTAURANT_ORDER_CREATE', result: 'SUCCESS', targetId: created.id, details: { number: created.number, source, reservationId: reservation?.id ?? null, totalAmount: totalAmount.toFixed(2) } },
+        data: { actorId: scope.userId, action: 'RESTAURANT_ORDER_CREATE', result: 'SUCCESS', targetId: created.id, details: { number: created.number, source: effectiveSource, reservationId: reservation?.id ?? null, roomId: reservation?.roomId ?? null, totalAmount: totalAmount.toFixed(2), ...(directPaymentMethod ? { paid: true, paymentMethod: directPaymentMethod.code, receivedAmount: receivedAmount ?? totalAmount.toNumber(), change: Math.max(0, (receivedAmount ?? totalAmount.toNumber()) - totalAmount.toNumber()) } : {}) } },
       });
       return created;
     });

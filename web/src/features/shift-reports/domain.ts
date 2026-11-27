@@ -1,11 +1,13 @@
 export type ShiftMoneyMovement = { amount: string; paymentMethodCode: string };
 
 function toCents(value: string) {
-  if (!/^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/.test(value)) throw new RangeError('Montant invalide.');
-  const [whole, fraction = ''] = value.split('.');
+  const negative = value.startsWith('-');
+  const unsigned = negative ? value.slice(1) : value;
+  if (!/^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/.test(unsigned)) throw new RangeError('Montant invalide.');
+  const [whole, fraction = ''] = unsigned.split('.');
   const cents = Number(whole) * 100 + Number(fraction.padEnd(2, '0'));
   if (!Number.isSafeInteger(cents)) throw new RangeError('Montant hors limite.');
-  return cents;
+  return negative ? -cents : cents;
 }
 
 function fromCents(cents: number) {
@@ -19,12 +21,16 @@ export function calculateCashDrawer(
   payments: ShiftMoneyMovement[],
   expenses: ShiftMoneyMovement[],
 ) {
-  const cashReceivedCents = payments
-    .filter((movement) => movement.paymentMethodCode === 'CASH')
+  const cashPayments = payments.filter((movement) => movement.paymentMethodCode === 'CASH');
+  const cashReceivedCents = cashPayments
+    .filter((movement) => toCents(movement.amount) > 0)
     .reduce((total, movement) => total + toCents(movement.amount), 0);
+  const cashOutflowFromPaymentsCents = cashPayments
+    .filter((movement) => toCents(movement.amount) < 0)
+    .reduce((total, movement) => total - toCents(movement.amount), 0);
   const cashExpensesCents = expenses
     .filter((movement) => movement.paymentMethodCode === 'CASH')
-    .reduce((total, movement) => total + toCents(movement.amount), 0);
+    .reduce((total, movement) => total + toCents(movement.amount), cashOutflowFromPaymentsCents);
   const availableCents = toCents(openingAmount) + cashReceivedCents;
   return {
     cashReceived: fromCents(cashReceivedCents),
